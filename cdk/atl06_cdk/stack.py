@@ -18,7 +18,10 @@ from constructs import Construct
 from atl06_cdk.settings import StackSettings
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-ASSET_EXCLUDE = [".venv", ".git", ".superpowers", "cdk.out", "cdk/cdk.out", ".env", "**/__pycache__", "tests", "docs"]
+ASSET_EXCLUDE = [
+    ".venv", ".git", ".superpowers", "cdk.out", "cdk/cdk.out", ".env",
+    "**/__pycache__", "tests", "docs",
+]
 
 
 class Atl06StacHashStack(Stack):
