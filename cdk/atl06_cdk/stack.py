@@ -72,7 +72,7 @@ class Atl06StacHashStack(Stack):
             secret.grant_read(fn)
             return fn
 
-        inventory = function("Inventory", "inventory_handler", 1024)
+        inventory = function("Inventory", "inventory_handler", 3008)
         sample = function("Sample", "sample_handler", settings.convert_memory_mb)
         plan_splits = function("PlanSplits", "plan_splits_handler", 4096)
         convert = function("Convert", "convert_handler", settings.convert_memory_mb)
@@ -135,7 +135,7 @@ class Atl06StacHashStack(Stack):
             self,
             "Pipeline",
             definition_body=sfn.DefinitionBody.from_chainable(definition),
-            timeout=Duration.hours(24),
+            timeout=Duration.days(7),  # a full year at default concurrency may exceed 24 h
         )
         bucket.grant_read_write(self.state_machine)
 

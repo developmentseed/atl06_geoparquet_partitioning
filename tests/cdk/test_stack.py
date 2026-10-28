@@ -70,3 +70,17 @@ def test_batch_input_resolves_run_prefix(template):
 
 def test_maps_write_results_to_s3(template):
     assert definition(template).count('\\"ResultWriter\\"') == 3
+
+
+def test_state_machine_timeout_is_seven_days(template):
+    assert '\\"TimeoutSeconds\\":604800' in definition(template)
+
+
+def test_inventory_has_3gb_for_a_full_year_of_cmr_results(template):
+    template.has_resource_properties(
+        "AWS::Lambda::Function",
+        {
+            "MemorySize": 3008,
+            "ImageConfig": {"Command": ["atl06_processor.handlers.inventory_handler"]},
+        },
+    )
