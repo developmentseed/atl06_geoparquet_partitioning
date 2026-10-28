@@ -1,0 +1,8 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+cdk/cdk.out/
+.superpowers/
+*.egg-info/
