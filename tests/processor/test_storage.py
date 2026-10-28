@@ -66,3 +66,16 @@ def test_split_s3_url():
     assert storage.split_s3_url("s3://bucket/a/b/c.h5") == ("bucket", "a/b/c.h5")
     with pytest.raises(ValueError):
         storage.split_s3_url("https://bucket/a.h5")
+
+
+def test_put_parquet_streams_without_buffering_whole_file(monkeypatch):
+    store = MemoryStore()
+
+    def no_single_put(*args, **kwargs):
+        raise AssertionError("put_parquet must stream through open_writer, not obstore.put")
+
+    monkeypatch.setattr(storage.obstore, "put", no_single_put)
+    table = pa.table({"a": np.arange(2_000_000)})
+    storage.put_parquet(store, "big.parquet", table, compression="zstd", row_group_size=500_000)
+    md = pq.read_metadata(pa.BufferReader(storage.read_bytes(store, "big.parquet")))
+    assert md.num_rows == 2_000_000 and md.num_row_groups == 4

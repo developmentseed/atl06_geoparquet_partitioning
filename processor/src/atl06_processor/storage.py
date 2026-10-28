@@ -45,12 +45,45 @@ def put_bytes(store: ObjectStore, key: str, data: bytes) -> None:
     obstore.put(store, key, data)
 
 
+class _ObstoreSink:
+    """Writable file over obstore's multipart writer, shaped for ``pa.PythonFile``.
+
+    pyarrow needs ``closed`` as a property and ``tell``; obstore's writer has ``closed()``
+    as a method and no ``tell``.
+    """
+
+    def __init__(self, writer):
+        self._writer = writer
+        self._position = 0
+
+    @property
+    def closed(self) -> bool:
+        return self._writer.closed()
+
+    def writable(self) -> bool:
+        return True
+
+    def write(self, data) -> int:
+        n = len(memoryview(data))
+        self._writer.write(data)
+        self._position += n
+        return n
+
+    def tell(self) -> int:
+        return self._position
+
+    def flush(self) -> None:
+        self._writer.flush()
+
+    def close(self) -> None:
+        if not self._writer.closed():
+            self._writer.close()
+
+
 def put_parquet(store: ObjectStore, key: str, table: pa.Table, **kwargs) -> None:
-    sink = pa.BufferOutputStream()
-    pq.write_table(table, sink, **kwargs)
-    # obstore.put rejects pyarrow Buffers, and pyarrow can't write into obstore's writer
-    # (its `closed` is a method), so upload a bytes copy; outputs are <= ~1 GB.
-    obstore.put(store, key, sink.getvalue().to_pybytes())
+    """Stream Parquet straight into a multipart upload; no whole-file buffer."""
+    with obstore.open_writer(store, key) as writer:
+        pq.write_table(table, pa.PythonFile(_ObstoreSink(writer), mode="w"), **kwargs)
 
 
 def put_json(store: ObjectStore, key: str, obj) -> None:
