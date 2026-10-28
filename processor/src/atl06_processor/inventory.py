@@ -27,8 +27,15 @@ def search_granules(settings: Settings, start: datetime, end: datetime) -> list[
 def build_inventory(
     granules: list[tuple[str, str]], sample_fraction: float, seed: int, limit: int | None
 ) -> tuple[pa.Table, list[dict], list[dict]]:
-    """Assign srcid by sorted granule name; pick a random sample (at least one granule)."""
-    ordered = sorted(granules)[:limit]
+    """Assign srcid by sorted granule name; pick a random sample (at least one granule).
+
+    ``limit`` keeps N granules evenly spaced through the sorted (time-ordered) list, so a
+    small spike still spans the whole period.
+    """
+    ordered = sorted(granules)
+    if limit is not None and limit < len(ordered):
+        keep = np.unique(np.linspace(0, len(ordered) - 1, limit).round().astype(int))
+        ordered = [ordered[i] for i in keep]
     items = [{"srcid": i, "granule": n, "s3_url": u} for i, (n, u) in enumerate(ordered)]
     table = pa.table(
         {

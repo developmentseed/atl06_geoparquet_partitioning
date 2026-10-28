@@ -58,3 +58,12 @@ def test_nsidc_creds_refresh_after_50_min():
     now[0] = 51 * 60
     s3.fs()
     assert len(fetched) == 2
+
+
+def test_limit_spreads_across_the_year():
+    names = [f"ATL06_2023{m:02d}01000000_0{m:02d}00201_006_01.h5" for m in range(1, 13)]
+    granules = [(n, f"s3://b/{n}") for n in names]
+    _, items, _ = build_inventory(granules, sample_fraction=1.0, seed=0, limit=4)
+    months = [int(i["granule"][10:12]) for i in items]
+    assert months[0] == 1 and months[-1] == 12 and len(set(months)) == 4
+    assert [i["srcid"] for i in items] == [0, 1, 2, 3]

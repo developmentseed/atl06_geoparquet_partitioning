@@ -82,3 +82,8 @@ def test_plan_splits_batches_sample_reads(local_env, monkeypatch):
     monkeypatch.setattr(handlers, "get_output_fs", lambda: counting)
     handlers.plan_splits_handler({"run_prefix": "runs/t"})
     assert counting.opens == 0 and counting.cats == 3  # granules.json, sample.json, sample parts
+
+
+def test_inventory_rejects_window_outside_configured_year(local_env):
+    with pytest.raises(ValueError, match="outside ATL06_YEAR"):
+        handlers.inventory_handler({"run_prefix": "runs/w", "start": "2022-07-01T00:00:00+00:00"})

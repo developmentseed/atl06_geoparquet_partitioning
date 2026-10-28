@@ -65,6 +65,13 @@ def inventory_handler(event: dict, context=None) -> dict:
         start = datetime.fromisoformat(event["start"])
     if event.get("end"):
         end = datetime.fromisoformat(event["end"])
+    year_start, year_end = year_bounds(settings.year)
+    if start < year_start or end > year_end or start >= end:
+        # Points are filtered to ATL06_YEAR, so anything outside it would silently vanish.
+        raise ValueError(
+            f"search window {start.isoformat()}..{end.isoformat()} is outside ATL06_YEAR "
+            f"{settings.year} (or empty)"
+        )
     fs = get_output_fs()
     # A prefix is single-use: stale fragments routed under old cuts would corrupt the output.
     if fs.exists(paths.root) and fs.ls(paths.root):
