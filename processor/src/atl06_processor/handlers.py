@@ -65,11 +65,19 @@ def inventory_handler(event: dict, context=None) -> dict:
         start = datetime.fromisoformat(event["start"])
     if event.get("end"):
         end = datetime.fromisoformat(event["end"])
+    fs = get_output_fs()
+    # A prefix is single-use: stale fragments routed under old cuts would corrupt the output.
+    if fs.exists(paths.root) and fs.ls(paths.root):
+        if not event.get("overwrite"):
+            raise ValueError(
+                f"run prefix {prefix!r} already exists; use a new run_prefix or pass "
+                '"overwrite": true to delete it first'
+            )
+        fs.rm(paths.root, recursive=True)
     granules = search_granules(settings, start, end)
     table, items, sampled = build_inventory(
         granules, settings.sample_granule_fraction, seed=0, limit=event.get("limit")
     )
-    fs = get_output_fs()
     write_parquet(fs, paths.granules_table(), table)
     _put_json(fs, paths.granules_json(), items)
     _put_json(fs, paths.sample_json(), sampled)

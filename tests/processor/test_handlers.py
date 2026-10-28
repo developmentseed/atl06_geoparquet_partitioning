@@ -52,3 +52,20 @@ def test_handlers_end_to_end_local(local_env):
     handlers.compact_handler({"Items": ranges, "BatchInput": batch_input})
     report = handlers.finalize_handler({"run_prefix": "runs/t"})
     assert report["rows_out_compact"] == 3000 and report["files"] >= 2
+
+
+def test_inventory_refuses_existing_run_prefix(local_env):
+    handlers.inventory_handler({"run_prefix": "runs/t"})
+    with pytest.raises(ValueError, match="already exists"):
+        handlers.inventory_handler({"run_prefix": "runs/t"})
+
+
+def test_inventory_overwrite_clears_previous_run(local_env):
+    fs, bucket = local_env
+    handlers.inventory_handler({"run_prefix": "runs/t"})
+    stale = f"{bucket}/runs/t/staging/range=00000/old.parquet"
+    fs.makedirs(stale.rsplit("/", 1)[0], exist_ok=True)
+    fs.pipe(stale, b"x")
+    handlers.inventory_handler({"run_prefix": "runs/t", "overwrite": True})
+    assert not fs.exists(stale)
+    assert fs.exists(f"{bucket}/runs/t/manifest/granules.json")
