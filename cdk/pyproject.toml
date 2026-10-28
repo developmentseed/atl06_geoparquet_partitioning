@@ -3,7 +3,7 @@ name = "atl06-cdk"
 version = "0.1.0"
 description = "CDK app for the ATL06 stac-hash pipeline"
 requires-python = ">=3.12"
-dependencies = []
+dependencies = ["aws-cdk-lib>=2.200", "constructs>=10", "pydantic-settings>=2.4"]
 
 [build-system]
 requires = ["hatchling"]
