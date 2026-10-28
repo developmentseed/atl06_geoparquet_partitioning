@@ -10,7 +10,7 @@ import duckdb
 import pyarrow as pa
 
 from atl06_benchmark.config import Suite
-from atl06_benchmark.sql import build_sql
+from atl06_benchmark.sql import build_files_scanned_sql, build_sql
 
 
 @dataclass
@@ -19,7 +19,8 @@ class QueryMetrics:
     query: str
     repeat: int
     files_total: int
-    files_read: int
+    footers_read: int  # DuckDB opens every file's footer to prune; not a pruning measure
+    files_scanned: int  # files with >= 1 row group whose statistics can match the query
     row_groups_total: int
     row_groups_scanned: int
     bytes_read: int
@@ -36,7 +37,7 @@ def _table_scans(node: dict):
 
 def run_query(
     con: duckdb.DuckDBPyConnection, sql: str, files_total: int,
-    dataset: str = "", query: str = "", repeat: int = 0,
+    dataset: str = "", query: str = "", repeat: int = 0, files_scanned: int = -1,
 ) -> QueryMetrics:
     with tempfile.TemporaryDirectory() as tmp:
         profile = Path(tmp) / "profile.json"
@@ -55,7 +56,8 @@ def run_query(
         query=query,
         repeat=repeat,
         files_total=files_total,
-        files_read=sum(int(s["extra_info"].get("Total Files Read", 0)) for s in scans),
+        footers_read=sum(int(s["extra_info"].get("Total Files Read", 0)) for s in scans),
+        files_scanned=files_scanned,
         row_groups_total=p["query"]["total_row_groups_to_scan"],
         row_groups_scanned=p["query"]["total_row_groups_scanned"],
         bytes_read=p["io"]["total_bytes_read"],
@@ -79,6 +81,8 @@ def run_suite(suite: Suite) -> pa.Table:
         files_total = con.execute(f"SELECT count(*) FROM glob('{ds.uri}')").fetchall()[0][0]
         for q in suite.queries:
             sql = build_sql(ds.uri, q)
+            scanned = con.execute(build_files_scanned_sql(ds.uri, q)).fetchall()[0][0]
             for r in range(suite.repeats):
-                results.append(asdict(run_query(con, sql, files_total, ds.name, q.name, r)))
+                metrics = run_query(con, sql, files_total, ds.name, q.name, r, scanned)
+                results.append(asdict(metrics))
     return pa.Table.from_pylist(results)

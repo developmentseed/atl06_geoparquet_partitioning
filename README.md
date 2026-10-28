@@ -59,8 +59,9 @@ aws stepfunctions start-execution --region us-west-2 \
   --input '{"run_prefix": "runs/spike-1", "limit": 40}'
 ```
 
-Execution input: `run_prefix` (required), optional `start`/`end` (ISO datetimes, default the
-configured year) and `limit` (first N granules by name). `.env.sample` already holds spike settings
+Execution input: `run_prefix` (required; single-use, so pass `"overwrite": true` to delete and
+redo a previous run), optional `start`/`end` (ISO datetimes within `ATL06_YEAR`, default the whole
+year) and `limit` (N granules evenly spaced through the year, so a spike spans all of it). `.env.sample` already holds spike settings
 (`CDK_SAMPLE_GRANULE_FRACTION=1.0`, a small `CDK_TARGET_ROWS_PER_FILE`) so a spike yields ≥ 10 files.
 
 ## Benchmark
@@ -75,7 +76,9 @@ uv run atl06-bench run --suite benchmark/queries.toml --out results.parquet
 ```
 
 Queries use only plain predicates on `time_ns` and `bbox.*`; pruning is DuckDB's own pushdown.
-Metrics per query and repeat: files read/total, row groups scanned/total, bytes read, rows, wall time.
+Metrics per query and repeat: `files_total`, `footers_read` (DuckDB opens every footer, so this is
+not a pruning measure), `files_scanned` (files with at least one row group whose statistics can
+match, derived from `parquet_metadata()`), row groups scanned/total, bytes read, rows, wall time.
 
 ## Assumptions
 
@@ -85,6 +88,8 @@ Metrics per query and repeat: files read/total, row groups scanned/total, bytes 
   offset (valid for all dates since 2017-01-01).
 - **Fill values** (`_FillValue` attributes) become null; no rows are dropped for quality.
 - **Year membership** is by each point's own timestamp, half-open `[Jan 1, Jan 1 next year)`.
+- **Unhashable rows** (fill `latitude`, `longitude` or `delta_time`) are dropped and counted as
+  `dropped_invalid` in `report.json`; a point with no time or position has no stac-hash.
 - **Hasher**: global extent over the configured year.
 - **Sampling**: 2% of granules, 1% of their rows, by default. The row estimate uses the realized
   granule fraction.
