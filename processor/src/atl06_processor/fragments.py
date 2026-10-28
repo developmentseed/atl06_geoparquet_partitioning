@@ -23,6 +23,7 @@ class ConvertStats:
     rows_in: int = 0
     rows_out: int = 0
     dropped_out_of_year: int = 0
+    dropped_invalid: int = 0
     ranges_touched: int = 0
     fragment_rows: dict[int, int] = field(default_factory=dict)
 
@@ -58,9 +59,10 @@ def convert_granule(
     by_range: dict[int, list[pa.RecordBatch]] = {}
     with src_fs.open(src_path, "rb") as f, h5py.File(f, "r") as h5:
         for batch in iter_beam_batches(h5, info, srcid):
-            hashed, dropped = filter_and_hash(batch, year, hasher)
+            hashed, out_of_year, invalid = filter_and_hash(batch, year, hasher)
             stats.rows_in += len(batch)
-            stats.dropped_out_of_year += dropped
+            stats.dropped_out_of_year += out_of_year
+            stats.dropped_invalid += invalid
             rids = splits.range_ids(hashed["stac_hash"].to_numpy(zero_copy_only=False))
             for rid in np.unique(rids):
                 by_range.setdefault(int(rid), []).append(

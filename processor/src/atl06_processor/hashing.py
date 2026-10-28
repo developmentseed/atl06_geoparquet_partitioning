@@ -21,22 +21,31 @@ def make_hasher(year: int) -> Hasher:
 
 def filter_and_hash(
     batch: pa.RecordBatch, year: int, hasher: Hasher
-) -> tuple[pa.RecordBatch, int]:
-    """Drop rows outside the year (by their own timestamp), then append ``stac_hash``.
+) -> tuple[pa.RecordBatch, int, int]:
+    """Drop unhashable rows, then rows outside the year (by their own timestamp), then
+    append ``stac_hash``.
 
-    Returns the hashed batch (conforming to SCHEMA) and the number of rows dropped.
+    Returns the hashed batch (conforming to SCHEMA), the number of rows dropped as out of
+    year, and the number dropped as invalid (no time or no position, so no hash exists).
     """
+    bbox = batch["bbox"]
+    hashable = pc.and_(
+        pc.is_valid(batch["time_ns"]),
+        pc.and_(pc.is_valid(bbox.field("xmin")), pc.is_valid(bbox.field("ymin"))),
+    )
+    valid = batch.filter(hashable)
     start, end = year_bounds(year)
-    t = batch["time_ns"]
+    t = valid["time_ns"]
     in_year = pc.and_(
         pc.greater_equal(t, pa.scalar(start.replace(tzinfo=None), t.type)),
         pc.less(t, pa.scalar(end.replace(tzinfo=None), t.type)),
     )
-    kept = batch.filter(in_year)
+    kept = valid.filter(in_year)
     # stac-hash quantizes time far coarser than 1 us, so truncating ns is harmless.
     datetimes = kept["time_ns"].cast(pa.timestamp("us", tz="UTC"), safe=False).to_pylist()
     lon = kept["bbox"].field("xmin").to_pylist()
     lat = kept["bbox"].field("ymin").to_pylist()
     hashes = pa.array(hasher.hash_all(datetimes, lon, lat), pa.uint64())
     columns = [kept[f.name] if f.name != "stac_hash" else hashes for f in SCHEMA]
-    return pa.RecordBatch.from_arrays(columns, schema=SCHEMA), len(batch) - len(kept)
+    out = pa.RecordBatch.from_arrays(columns, schema=SCHEMA)
+    return out, len(valid) - len(kept), len(batch) - len(valid)

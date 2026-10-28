@@ -16,7 +16,7 @@ def sample_granule(
     count, parts = 0, []
     with fs.open(src_path, "rb") as f, h5py.File(f, "r") as h5:
         for batch in iter_beam_batches(h5, info, srcid=0):
-            hashed, _ = filter_and_hash(batch, year, hasher)
+            hashed, _, _ = filter_and_hash(batch, year, hasher)
             count += len(hashed)
             h = hashed["stac_hash"].to_numpy(zero_copy_only=False)
             parts.append(h[rng.random(len(h)) < row_fraction])

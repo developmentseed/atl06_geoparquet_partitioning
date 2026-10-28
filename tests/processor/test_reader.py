@@ -63,3 +63,15 @@ def test_missing_and_empty_beams_skipped(make_granule, tmp_path):
     batches = read(path)
     assert len(batches) == 1
     assert set(batches[0]["gt"].to_pylist()) == {60}
+
+
+def test_fill_lat_lon_time_become_null(make_granule, tmp_path):
+    spec = beam(4)
+    spec.lat = np.array([-70.0, 1.7976931348623157e308, -70.2, -70.3])
+    spec.delta_time = spec.delta_time.copy()
+    spec.delta_time[3] = 1.7976931348623157e308
+    path = make_granule(tmp_path, NAME, {"gt1l": spec})
+    b = read(path)[0]
+    assert b["geometry"].null_count == 1 and not b["geometry"][1].is_valid
+    assert b["bbox"].field("ymin")[1].as_py() is None
+    assert b["time_ns"][3].as_py() is None and b["time_ns"][0].is_valid

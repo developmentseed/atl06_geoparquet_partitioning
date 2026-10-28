@@ -10,6 +10,7 @@ import pytest
 
 ATLAS_SDP_GPS_EPOCH = 1198800018.0  # 2018-01-01T00:00:00 UTC in GPS seconds
 FLOAT_FILL = np.float32(3.4028235e38)
+DOUBLE_FILL = np.float64(1.7976931348623157e308)
 GPS_EPOCH = datetime(1980, 1, 6, tzinfo=UTC)
 GPS_UTC_LEAP_S = 18
 
@@ -54,9 +55,9 @@ def write_granule(directory: Path, name: str, beams: dict[str, BeamSpec]) -> Pat
                 if fill is not None:
                     ds.attrs["_FillValue"] = fill
 
-            put("", "delta_time", np.asarray(spec.delta_time, np.float64))
-            put("", "latitude", np.asarray(spec.lat, np.float64))
-            put("", "longitude", np.asarray(spec.lon, np.float64))
+            put("", "delta_time", np.asarray(spec.delta_time, np.float64), DOUBLE_FILL)
+            put("", "latitude", np.asarray(spec.lat, np.float64), DOUBLE_FILL)
+            put("", "longitude", np.asarray(spec.lon, np.float64), DOUBLE_FILL)
             put("", "segment_id", np.arange(n, dtype=np.int32) + 1000)
             put("", "atl06_quality_summary", np.zeros(n, np.int8))
             put("ground_track", "x_atc", np.arange(n, dtype=np.float64) * 20.0)

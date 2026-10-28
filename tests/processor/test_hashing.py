@@ -31,26 +31,26 @@ def test_year_bounds():
 
 
 def test_filter_and_hash_drops_out_of_year(make_granule, tmp_path):
-    out, dropped = filter_and_hash(batch(make_granule, tmp_path), 2023, make_hasher(2023))
-    assert dropped == 2
+    out, dropped, invalid = filter_and_hash(batch(make_granule, tmp_path), 2023, make_hasher(2023))
+    assert dropped == 2 and invalid == 0
     assert out["time_ns"].to_pylist() == [datetime(2023, 6, 1)]
 
 
 def test_hash_matches_library(make_granule, tmp_path):
     hasher = make_hasher(2023)
-    out, _ = filter_and_hash(batch(make_granule, tmp_path), 2023, hasher)
+    out, _, _ = filter_and_hash(batch(make_granule, tmp_path), 2023, hasher)
     assert out["stac_hash"][0].as_py() == hasher.hash(TIMES[1], 20.0, -75.0)
 
 
 def test_output_conforms_to_schema(make_granule, tmp_path):
-    out, _ = filter_and_hash(batch(make_granule, tmp_path), 2023, make_hasher(2023))
+    out, _, _ = filter_and_hash(batch(make_granule, tmp_path), 2023, make_hasher(2023))
     assert out.schema.names == SCHEMA.names
     assert out.schema.field("stac_hash").type == pa.uint64()
 
 
 def test_all_rows_out_of_year_returns_empty_batch(make_granule, tmp_path):
     b = batch(make_granule, tmp_path, [TIMES[0], TIMES[2]])
-    out, dropped = filter_and_hash(b, 2023, make_hasher(2023))
+    out, dropped, _ = filter_and_hash(b, 2023, make_hasher(2023))
     assert len(out) == 0 and dropped == 2 and out.schema.names == SCHEMA.names
 
 
@@ -65,5 +65,18 @@ def test_sub_microsecond_times_hash():
     b = pa.RecordBatch.from_pydict(
         {**full, "time_ns": t, "bbox": b["bbox"]}, schema=pa.schema(
             [f for f in SCHEMA if f.name != "stac_hash"]))
-    out, dropped = filter_and_hash(b, 2023, make_hasher(2023))
+    out, dropped, _ = filter_and_hash(b, 2023, make_hasher(2023))
     assert dropped == 0 and out["stac_hash"][0].as_py() > 0
+
+
+def test_rows_without_time_or_location_dropped_and_counted(make_granule, tmp_path):
+    from tests.conftest import DOUBLE_FILL
+    times = [datetime(2023, 6, 1, tzinfo=UTC)] * 3
+    dt = np.array([delta_time_for(t) for t in times])
+    dt[2] = DOUBLE_FILL
+    lat = np.array([-75.0, DOUBLE_FILL, -75.0])
+    path = make_granule(tmp_path, NAME, {"gt1l": BeamSpec(dt, lat, np.full(3, 20.0))})
+    with h5py.File(path, "r") as h5:
+        b = next(iter_beam_batches(h5, parse_granule_name(NAME), 0))
+    out, dropped, invalid = filter_and_hash(b, 2023, make_hasher(2023))
+    assert len(out) == 1 and dropped == 0 and invalid == 2

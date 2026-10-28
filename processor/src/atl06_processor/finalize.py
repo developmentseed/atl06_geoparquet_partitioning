@@ -38,6 +38,7 @@ def finalize_run(fs, paths: RunPaths) -> dict:
         "rows_out_convert": sum(c.rows_out for c in converts),
         "rows_out_compact": sum(f.rows for f in files),
         "dropped_out_of_year": sum(c.dropped_out_of_year for c in converts),
+        "dropped_invalid": sum(c.dropped_invalid for c in converts),
         "files": len(files),
         "rows_per_file": rows_per_file,
         "bytes_per_file": _spread([f.bytes for f in files]),

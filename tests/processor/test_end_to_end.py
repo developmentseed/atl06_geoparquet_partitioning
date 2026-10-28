@@ -58,7 +58,8 @@ def pipeline_run(make_granule, tmp_path):
 def test_pipeline_end_to_end(pipeline_run):
     fs, paths, report = pipeline_run
     assert report["rows_out_convert"] == report["rows_out_compact"]
-    assert report["rows_in"] == report["rows_out_convert"] + report["dropped_out_of_year"]
+    dropped = report["dropped_out_of_year"] + report["dropped_invalid"]
+    assert report["rows_in"] == report["rows_out_convert"] + dropped
     assert report["dropped_out_of_year"] > 0
     assert report["files"] >= 4
     assert report["rows_per_file"]["max_over_median"] < 2

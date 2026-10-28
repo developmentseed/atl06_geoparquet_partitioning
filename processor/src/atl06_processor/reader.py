@@ -35,17 +35,25 @@ _VARIABLES: dict[str, str] = {
 }
 
 
-def _read(ds: h5py.Dataset, type_: pa.DataType) -> pa.Array:
+def _values_and_fill(ds: h5py.Dataset) -> tuple[np.ndarray, np.ndarray]:
+    """Dataset values and a boolean mask of ``_FillValue`` entries."""
     values = ds[()]
     fill = ds.attrs.get("_FillValue")
-    mask = None if fill is None else values == np.asarray(fill).reshape(-1)[0]
-    return pa.array(values, mask=mask).cast(type_)
+    if fill is None:
+        return values, np.zeros(len(values), bool)
+    return values, values == np.asarray(fill).reshape(-1)[0]
 
 
-def _time_ns(delta_time: np.ndarray, gps_epoch: float) -> pa.Array:
-    gps_ns = np.round((gps_epoch + delta_time) * 1e9).astype(np.int64)
+def _read(ds: h5py.Dataset, type_: pa.DataType) -> pa.Array:
+    values, is_fill = _values_and_fill(ds)
+    return pa.array(values, mask=is_fill).cast(type_)
+
+
+def _time_ns(delta_time: np.ndarray, gps_epoch: float, is_fill: np.ndarray) -> pa.Array:
+    seconds = np.where(is_fill, 0.0, gps_epoch + delta_time)
+    gps_ns = np.round(seconds * 1e9).astype(np.int64)
     unix_ns = gps_ns + (GPS_EPOCH_UNIX_S - GPS_UTC_LEAP_S) * 1_000_000_000
-    return pa.array(unix_ns, pa.timestamp("ns"))
+    return pa.array(unix_ns, pa.timestamp("ns"), mask=is_fill)
 
 
 def _const(value: int, n: int, type_: pa.DataType) -> pa.Array:
@@ -60,18 +68,20 @@ def iter_beam_batches(h5: h5py.File, info: GranuleInfo, srcid: int) -> Iterator[
             continue
         n = lis["delta_time"].shape[0]
         spot = int(np.asarray(h5[gt].attrs["atlas_spot_number"]).item())
-        lon = lis["longitude"][()]
-        lat = lis["latitude"][()]
+        lon, lon_fill = _values_and_fill(lis["longitude"])
+        lat, lat_fill = _values_and_fill(lis["latitude"])
+        located = ~(lon_fill | lat_fill)
+        delta_time, time_fill = _values_and_fill(lis["delta_time"])
         columns: dict[str, pa.Array] = {
-            "time_ns": _time_ns(lis["delta_time"][()], gps_epoch),
+            "time_ns": _time_ns(delta_time, gps_epoch, time_fill),
             "region": _const(info.region, n, pa.uint8()),
             "gt": _const(gt_code, n, pa.uint8()),
             "rgt": _const(info.rgt, n, pa.uint16()),
             "spot": _const(spot, n, pa.uint8()),
             "srcid": _const(srcid, n, pa.int32()),
             "cycle": _const(info.cycle, n, pa.uint8()),
-            "geometry": points_to_wkb(lon, lat),
-            "bbox": bbox_struct(lon, lat),
+            "geometry": points_to_wkb(lon, lat, located),
+            "bbox": bbox_struct(lon, lat, located),
         }
         for name, path in _VARIABLES.items():
             columns[name] = _read(lis[path], PRE_HASH_SCHEMA.field(name).type)
