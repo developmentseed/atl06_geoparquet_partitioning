@@ -28,7 +28,8 @@ def staged(make_granule, tmp_path):
         dt = delta_time_for(datetime(2023, 6, 1 + i, tzinfo=UTC)) + np.arange(n) * 0.01
         h_li = rng.uniform(0, 3000, n).astype(np.float32)
         h_li[::50] = FLOAT_FILL
-        spec = BeamSpec(dt, rng.uniform(-90, -60, n), rng.uniform(-180, 180, n), overrides={"h_li": h_li})
+        lat, lon = rng.uniform(-90, -60, n), rng.uniform(-180, 180, n)
+        spec = BeamSpec(dt, lat, lon, overrides={"h_li": h_li})
         src = make_granule(tmp_path / "src", name, {"gt1l": spec})
         convert_granule(fs, str(src), fs, paths, parse_granule_name(name), i, 2023, splits)
     return fs, paths
