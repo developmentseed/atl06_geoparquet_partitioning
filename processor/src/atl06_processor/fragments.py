@@ -1,5 +1,6 @@
 """Convert phase: stream one granule and route its rows into per-range staging fragments."""
 
+import io
 import json
 from dataclasses import asdict, dataclass, field
 
@@ -7,8 +8,8 @@ import h5py
 import numpy as np
 import pyarrow as pa
 import pyarrow.compute as pc
-import pyarrow.parquet as pq
 
+from atl06_processor import storage
 from atl06_processor.granule import GranuleInfo
 from atl06_processor.hashing import filter_and_hash, make_hasher
 from atl06_processor.paths import RunPaths
@@ -37,16 +38,10 @@ class ConvertStats:
         return cls(**d)
 
 
-def write_parquet(fs, path: str, table: pa.Table, **kwargs) -> None:
-    fs.makedirs(path.rsplit("/", 1)[0], exist_ok=True)
-    with fs.open(path, "wb") as f:
-        pq.write_table(table, f, compression="zstd", **kwargs)
-
-
 def convert_granule(
-    src_fs,
-    src_path: str,
-    out_fs,
+    src_store,
+    src_key: str,
+    out_store,
     paths: RunPaths,
     info: GranuleInfo,
     srcid: int,
@@ -57,7 +52,8 @@ def convert_granule(
     hasher = make_hasher(year)
     stats = ConvertStats(granule=info.name)
     by_range: dict[int, list[pa.RecordBatch]] = {}
-    with src_fs.open(src_path, "rb") as f, h5py.File(f, "r") as h5:
+    # One GET for the whole granule; h5py's many small reads then hit memory, not S3.
+    with h5py.File(io.BytesIO(storage.read_bytes(src_store, src_key)), "r") as h5:
         for batch in iter_beam_batches(h5, info, srcid):
             hashed, out_of_year, invalid = filter_and_hash(batch, year, hasher)
             stats.rows_in += len(batch)
@@ -70,10 +66,9 @@ def convert_granule(
                 )
     for rid, batches in sorted(by_range.items()):
         table = pa.Table.from_batches(batches, schema=SCHEMA)
-        write_parquet(out_fs, paths.fragment(rid, info.name), table)
+        storage.put_parquet(out_store, paths.fragment(rid, info.name), table, compression="zstd")
         stats.fragment_rows[rid] = len(table)
     stats.rows_out = sum(stats.fragment_rows.values())
     stats.ranges_touched = len(stats.fragment_rows)
-    out_fs.makedirs(paths.convert_stats_dir(), exist_ok=True)
-    out_fs.pipe(paths.convert_stats(info.name), stats.to_json().encode())
+    storage.put_bytes(out_store, paths.convert_stats(info.name), stats.to_json().encode())
     return stats

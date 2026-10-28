@@ -7,6 +7,8 @@ import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
 
+from atl06_processor import storage
+
 HASH_END = 2**63  # stac-hash uses 63 bits; every hash is < 2**63
 
 
@@ -44,7 +46,7 @@ class SplitTable:
         bounds = [0, *(int(c) for c in self.cuts), HASH_END]
         return [(i, bounds[i], bounds[i + 1]) for i in range(self.n_ranges)]
 
-    def save(self, fs, path: str) -> None:
+    def save(self, store, key: str) -> None:
         rows = self.ranges()
         table = pa.table(
             {
@@ -53,11 +55,9 @@ class SplitTable:
                 "hash_hi": pa.array([r[2] for r in rows], pa.uint64()),
             }
         )
-        with fs.open(path, "wb") as f:
-            pq.write_table(table, f)
+        storage.put_parquet(store, key, table)
 
     @classmethod
-    def load(cls, fs, path: str) -> "SplitTable":
-        with fs.open(path, "rb") as f:
-            lo = pq.read_table(f)["hash_lo"].to_numpy()
-        return cls(lo[1:])
+    def load(cls, store, key: str) -> "SplitTable":
+        table = pq.read_table(pa.BufferReader(storage.read_bytes(store, key)))
+        return cls(table["hash_lo"].to_numpy()[1:])

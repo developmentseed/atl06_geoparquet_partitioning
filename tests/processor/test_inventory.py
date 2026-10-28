@@ -3,7 +3,6 @@ from types import SimpleNamespace
 
 from atl06_processor import inventory
 from atl06_processor.config import Settings
-from atl06_processor.credentials import NsidcS3
 from atl06_processor.inventory import build_inventory
 
 NAMES = [f"ATL06_2023010{i}000000_0{i}000201_006_01.h5" for i in (3, 1, 2, 5, 4)]
@@ -42,22 +41,16 @@ def test_search_granules_uses_direct_s3_links(monkeypatch):
     assert calls["short_name"] == "ATL06" and calls["version"] == "006"
 
 
-def test_nsidc_creds_refresh_after_50_min():
-    now = [0.0]
-    fetched = []
+def test_nsidc_store_uses_earthdata_provider(monkeypatch):
+    from atl06_processor import credentials
+    from obstore.auth.earthdata import NasaEarthdataCredentialProvider
+    from obstore.store import S3Store
 
-    def fetch():
-        fetched.append(now[0])
-        return {"accessKeyId": "a", "secretAccessKey": "b", "sessionToken": str(now[0])}
-
-    s3 = NsidcS3("secret", clock=lambda: now[0], fetch_credentials=fetch)
-    s3.fs()
-    now[0] = 49 * 60
-    s3.fs()
-    assert len(fetched) == 1
-    now[0] = 51 * 60
-    s3.fs()
-    assert len(fetched) == 2
+    monkeypatch.setattr(credentials, "earthdata_auth", lambda name: ("user", "pass"))
+    store = credentials.nsidc_store("nsidc-cumulus-prod-protected", "atl06/earthdata")
+    assert isinstance(store, S3Store)
+    assert store.config["bucket"] == "nsidc-cumulus-prod-protected"
+    assert isinstance(store.credential_provider, NasaEarthdataCredentialProvider)
 
 
 def test_limit_spreads_across_the_year():

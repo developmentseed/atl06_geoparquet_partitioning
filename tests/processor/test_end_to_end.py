@@ -3,11 +3,12 @@
 from datetime import UTC, datetime, timedelta
 
 import duckdb
-import fsspec
-import fsspec.implementations.local
 import numpy as np
+import obstore
+import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
+from atl06_processor import storage
 from atl06_processor.compact import compact_range
 from atl06_processor.finalize import finalize_run
 from atl06_processor.fragments import convert_granule
@@ -15,6 +16,7 @@ from atl06_processor.granule import parse_granule_name
 from atl06_processor.paths import RunPaths
 from atl06_processor.sample import sample_granule
 from atl06_processor.splits import SplitTable
+from obstore.store import LocalStore
 
 from tests.conftest import BeamSpec, delta_time_for
 
@@ -38,86 +40,80 @@ def synthetic_granules(make_granule, directory, rng):
 
 @pytest.fixture
 def pipeline_run(make_granule, tmp_path):
-    fs = fsspec.filesystem("file")
     (tmp_path / "src").mkdir()
     srcs = synthetic_granules(make_granule, tmp_path / "src", np.random.default_rng(0))
-    paths = RunPaths(str(tmp_path / "run"))
+    src = LocalStore(tmp_path / "src")
+    store = LocalStore(tmp_path / "out", mkdir=True)
+    paths = RunPaths("run")
     infos = [parse_granule_name(p.name) for p in srcs]
 
-    samples = [sample_granule(fs, str(p), info, 2023, 0.2, seed=i)
+    samples = [sample_granule(src, p.name, info, 2023, 0.2, seed=i)
                for i, (p, info) in enumerate(zip(srcs, infos, strict=True))]
     total = sum(c for c, _ in samples)
     hashes = np.concatenate([h for _, h in samples])
     splits = SplitTable.from_sample(hashes, total, target_rows_per_file=total // 5)
     for srcid, (p, info) in enumerate(zip(srcs, infos, strict=True)):
-        convert_granule(fs, str(p), fs, paths, info, srcid, 2023, splits)
+        convert_granule(src, p.name, store, paths, info, srcid, 2023, splits)
     for rid, _, _ in splits.ranges():
-        compact_range(fs, paths, rid, row_group_size=1000)
-    return fs, paths, finalize_run(fs, paths)
+        compact_range(store, paths, rid, row_group_size=1000)
+    return store, tmp_path / "out", paths, finalize_run(store, paths)
+
+
+def read(store, key, **kwargs):
+    return pq.read_table(pa.BufferReader(storage.read_bytes(store, key)), **kwargs)
 
 
 def test_pipeline_end_to_end(pipeline_run):
-    fs, paths, report = pipeline_run
+    store, root, paths, report = pipeline_run
     assert report["rows_out_convert"] == report["rows_out_compact"]
     dropped = report["dropped_out_of_year"] + report["dropped_invalid"]
     assert report["rows_in"] == report["rows_out_convert"] + dropped
     assert report["dropped_out_of_year"] > 0
     assert report["files"] >= 4
     assert report["rows_per_file"]["max_over_median"] < 2
-    for f in fs.glob(f"{paths.data_dir()}/*.parquet"):
-        h = pq.read_table(f, columns=["stac_hash"])["stac_hash"].to_numpy()
+    for key in storage.list_keys(store, paths.data_dir(), ".parquet"):
+        h = read(store, key, columns=["stac_hash"])["stac_hash"].to_numpy()
         assert np.all(np.diff(h.astype(np.int64)) >= 0)
-    sql = f"SELECT count(*) FROM read_parquet('{paths.data_dir()}/*.parquet')"
+    sql = f"SELECT count(*) FROM read_parquet('{root / paths.data_dir()}/*.parquet')"
     assert duckdb.sql(sql).fetchall()[0][0] == report["rows_out_compact"]
 
 
 def test_dataset_manifest_lists_every_file(pipeline_run):
-    fs, paths, report = pipeline_run
-    manifest = pq.read_table(paths.dataset_manifest())
+    store, _, paths, report = pipeline_run
+    manifest = read(store, paths.dataset_manifest())
     assert manifest.num_rows == report["files"]
     assert sum(manifest["rows"].to_pylist()) == report["rows_out_compact"]
 
 
 def test_finalize_detects_row_mismatch(pipeline_run):
-    fs, paths, _ = pipeline_run
-    fs.rm(fs.glob(f"{paths.data_dir()}/*.parquet")[0])
-    fs.rm(fs.glob(f"{paths.compact_stats_dir()}/*.json")[0])
+    store, _, paths, _ = pipeline_run
+    obstore.delete(store, storage.list_keys(store, paths.compact_stats_dir())[0])
     with pytest.raises(ValueError, match="row count mismatch"):
-        finalize_run(fs, paths)
+        finalize_run(store, paths)
 
 
-class CountingFS(fsspec.implementations.local.LocalFileSystem):
-    """Counts top-level reads; on s3fs one ``cat(list)`` is fetched concurrently."""
+@pytest.fixture
+def read_calls(monkeypatch):
+    """Counts storage reads: one get_many is a single concurrent batch."""
+    calls = {"get_many": 0, "read_bytes": 0}
+    for name in calls:
+        original = getattr(storage, name)
 
-    cachable = False  # fsspec would otherwise hand every test the same counting instance
+        def counted(*args, _name=name, _original=original, **kwargs):
+            calls[_name] += 1
+            return _original(*args, **kwargs)
 
-    def __init__(self):
-        super().__init__()
-        self.cats, self.opens, self._depth = 0, 0, 0
-
-    def cat(self, path, *args, **kwargs):
-        # Count only calls made by the code under test, not fsspec's internal ones.
-        self.cats += self._depth == 0
-        self._depth += 1
-        try:
-            return super().cat(path, *args, **kwargs)
-        finally:
-            self._depth -= 1
-
-    def open(self, path, mode="rb", *args, **kwargs):
-        self.opens += "r" in mode and self._depth == 0
-        return super().open(path, mode, *args, **kwargs)
+        monkeypatch.setattr(storage, name, counted)
+    return calls
 
 
-def test_finalize_batches_stats_reads(pipeline_run):
-    _, paths, _ = pipeline_run
-    fs = CountingFS()
-    finalize_run(fs, paths)
-    assert fs.cats == 2 and fs.opens == 0  # one batched read each for convert and compact stats
+def test_finalize_batches_stats_reads(pipeline_run, read_calls):
+    store, _, paths, _ = pipeline_run
+    finalize_run(store, paths)
+    assert read_calls == {"get_many": 2, "read_bytes": 0}  # convert stats, compact stats
 
 
-def test_compact_batches_fragment_reads(pipeline_run):
-    _, paths, _ = pipeline_run
-    fs = CountingFS()
-    compact_range(fs, paths, 0, row_group_size=1000)
-    assert fs.cats == 1 and fs.opens == 0
+def test_compact_batches_fragment_reads(pipeline_run, read_calls):
+    store, _, paths, _ = pipeline_run
+    compact_range(store, paths, 0, row_group_size=1000)
+    assert read_calls == {"get_many": 1, "read_bytes": 0}

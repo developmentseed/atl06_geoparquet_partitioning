@@ -1,17 +1,16 @@
-import json
 from datetime import UTC, datetime, timedelta
 
-import fsspec
 import numpy as np
 import pytest
-from atl06_processor import handlers
+from atl06_processor import handlers, storage
+from obstore.store import LocalStore
 
 from tests.conftest import BeamSpec, delta_time_for
+from tests.processor.test_end_to_end import read_calls  # noqa: F401  (fixture)
 
 
 @pytest.fixture
 def local_env(monkeypatch, make_granule, tmp_path):
-    fs = fsspec.filesystem("file")
     (tmp_path / "src").mkdir()
     rng = np.random.default_rng(0)
     granules = []
@@ -21,34 +20,39 @@ def local_env(monkeypatch, make_granule, tmp_path):
         n = 500
         dt = delta_time_for(start) + np.arange(n) * 0.05
         spec = BeamSpec(dt, rng.uniform(-88, 88, n), rng.uniform(-180, 180, n))
-        granules.append((name, str(make_granule(tmp_path / "src", name, {"gt1l": spec}))))
-    monkeypatch.setattr(handlers, "get_output_fs", lambda: fs)
-    monkeypatch.setattr(handlers, "get_source_fs", lambda: fs)
+        make_granule(tmp_path / "src", name, {"gt1l": spec})
+        granules.append((name, f"s3://nsidc-test/ATLAS/ATL06/006/{name}"))
+    src = LocalStore(tmp_path / "src")
+    out = LocalStore(tmp_path / "bucket", mkdir=True)
+    monkeypatch.setattr(handlers, "get_output_store", lambda: out)
+    monkeypatch.setattr(
+        handlers, "get_source", lambda url: (src, storage.split_s3_url(url)[1].rsplit("/", 1)[1])
+    )
     monkeypatch.setattr(handlers, "search_granules", lambda settings, start, end: granules)
-    monkeypatch.setenv("ATL06_BUCKET", str(tmp_path / "bucket"))
+    monkeypatch.setenv("ATL06_BUCKET", "test-bucket")
     monkeypatch.setenv("ATL06_SAMPLE_GRANULE_FRACTION", "0.5")
     monkeypatch.setenv("ATL06_SAMPLE_ROW_FRACTION", "1.0")
     monkeypatch.setenv("ATL06_TARGET_ROWS_PER_FILE", "750")
-    return fs, tmp_path / "bucket"
+    return out
 
 
 def test_handlers_end_to_end_local(local_env):
-    fs, bucket = local_env
+    store = local_env
     batch_input = {"run_prefix": "runs/t"}
     inv = handlers.inventory_handler({"run_prefix": "runs/t"})
     assert inv["granules"] == 6 and inv["sampled"] == 3
-    assert inv["bucket"] == str(bucket) and inv["sample_key"] == "runs/t/manifest/sample.json"
+    assert inv["bucket"] == "test-bucket" and inv["sample_key"] == "runs/t/manifest/sample.json"
 
-    sampled = json.loads(fs.cat(f"{bucket}/{inv['sample_key']}"))
+    sampled = storage.get_json(store, inv["sample_key"])
     handlers.sample_handler({"Items": sampled, "BatchInput": batch_input})
     plan = handlers.plan_splits_handler({"run_prefix": "runs/t"})
     assert plan["ranges"] == 4  # est 3000 rows / 750 per file
 
-    items = json.loads(fs.cat(f"{bucket}/{inv['granules_key']}"))
+    items = storage.get_json(store, inv["granules_key"])
     out = handlers.convert_handler({"Items": items, "BatchInput": batch_input})
     assert sum(o["rows_out"] for o in out) == 3000
 
-    ranges = json.loads(fs.cat(f"{bucket}/{plan['ranges_key']}"))
+    ranges = storage.get_json(store, plan["ranges_key"])
     handlers.compact_handler({"Items": ranges, "BatchInput": batch_input})
     report = handlers.finalize_handler({"run_prefix": "runs/t"})
     assert report["rows_out_compact"] == 3000 and report["files"] >= 2
@@ -61,29 +65,36 @@ def test_inventory_refuses_existing_run_prefix(local_env):
 
 
 def test_inventory_overwrite_clears_previous_run(local_env):
-    fs, bucket = local_env
+    store = local_env
     handlers.inventory_handler({"run_prefix": "runs/t"})
-    stale = f"{bucket}/runs/t/staging/range=00000/old.parquet"
-    fs.makedirs(stale.rsplit("/", 1)[0], exist_ok=True)
-    fs.pipe(stale, b"x")
+    stale = "runs/t/staging/range=00000/old.parquet"
+    storage.put_bytes(store, stale, b"x")
     handlers.inventory_handler({"run_prefix": "runs/t", "overwrite": True})
-    assert not fs.exists(stale)
-    assert fs.exists(f"{bucket}/runs/t/manifest/granules.json")
+    assert stale not in storage.list_keys(store, "runs/t")
+    assert "runs/t/manifest/granules.json" in storage.list_keys(store, "runs/t")
 
 
-def test_plan_splits_batches_sample_reads(local_env, monkeypatch):
-    from tests.processor.test_end_to_end import CountingFS
-
-    fs, bucket = local_env
+def test_plan_splits_batches_sample_reads(local_env, read_calls):  # noqa: F811
+    store = local_env
     inv = handlers.inventory_handler({"run_prefix": "runs/t"})
-    sampled = json.loads(fs.cat(f"{bucket}/{inv['sample_key']}"))
+    sampled = storage.get_json(store, inv["sample_key"])
     handlers.sample_handler({"Items": sampled, "BatchInput": {"run_prefix": "runs/t"}})
-    counting = CountingFS()
-    monkeypatch.setattr(handlers, "get_output_fs", lambda: counting)
+    read_calls.update(get_many=0, read_bytes=0)
     handlers.plan_splits_handler({"run_prefix": "runs/t"})
-    assert counting.opens == 0 and counting.cats == 3  # granules.json, sample.json, sample parts
+    # granules.json + sample.json, then one concurrent batch for every sample part
+    assert read_calls == {"get_many": 1, "read_bytes": 2}
 
 
 def test_inventory_rejects_window_outside_configured_year(local_env):
     with pytest.raises(ValueError, match="outside ATL06_YEAR"):
         handlers.inventory_handler({"run_prefix": "runs/w", "start": "2022-07-01T00:00:00+00:00"})
+
+
+def test_source_store_is_cached_per_bucket(monkeypatch):
+    made = []
+    monkeypatch.setattr(handlers, "_nsidc_store", lambda bucket: made.append(bucket) or bucket)
+    handlers._source_store.cache_clear()
+    assert handlers.get_source("s3://b1/x/a.h5") == ("b1", "x/a.h5")
+    assert handlers.get_source("s3://b1/y/b.h5") == ("b1", "y/b.h5")
+    assert handlers.get_source("s3://b2/z.h5") == ("b2", "z.h5")
+    assert made == ["b1", "b2"]

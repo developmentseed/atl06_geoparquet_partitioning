@@ -6,18 +6,17 @@ from dataclasses import asdict
 import numpy as np
 import pyarrow as pa
 
+from atl06_processor import storage
 from atl06_processor.compact import FileStats
-from atl06_processor.fragments import ConvertStats, write_parquet
+from atl06_processor.fragments import ConvertStats
 from atl06_processor.paths import RunPaths
 
 
-def _load(fs, directory: str, parse):
-    """One batched ``cat`` (concurrent on s3fs) for every JSON in ``directory``."""
-    paths = sorted(fs.glob(f"{directory}/*.json"))
-    if not paths:
-        return []
-    contents = fs.cat(paths)
-    return [parse(contents[p].decode()) for p in paths]
+def _load(store, prefix: str, parse):
+    """One concurrent batch of GETs for every JSON under ``prefix``."""
+    keys = storage.list_keys(store, prefix, ".json")
+    contents = storage.get_many(store, keys)
+    return [parse(bytes(contents[k])) for k in keys]
 
 
 def _spread(values: list[int]) -> dict:
@@ -27,10 +26,10 @@ def _spread(values: list[int]) -> dict:
     return {"min": int(a.min()), "median": float(np.median(a)), "max": int(a.max())}
 
 
-def finalize_run(fs, paths: RunPaths) -> dict:
+def finalize_run(store, paths: RunPaths) -> dict:
     """Writes manifest/dataset.parquet and manifest/report.json; raises on row loss."""
-    converts = _load(fs, paths.convert_stats_dir(), ConvertStats.from_json)
-    files = _load(fs, paths.compact_stats_dir(), FileStats.from_json)
+    converts = _load(store, paths.convert_stats_dir(), ConvertStats.from_json)
+    files = _load(store, paths.compact_stats_dir(), FileStats.from_json)
 
     rows_per_file = _spread([f.rows for f in files])
     rows_per_file["max_over_median"] = (
@@ -56,8 +55,8 @@ def finalize_run(fs, paths: RunPaths) -> dict:
     }
     if files:
         manifest = pa.Table.from_pylist([asdict(f) for f in files])
-        write_parquet(fs, paths.dataset_manifest(), manifest)
-    fs.pipe(paths.report(), json.dumps(report, indent=2).encode())
+        storage.put_parquet(store, paths.dataset_manifest(), manifest, compression="zstd")
+    storage.put_bytes(store, paths.report(), json.dumps(report, indent=2).encode())
     if report["rows_out_convert"] != report["rows_out_compact"]:
         raise ValueError(
             f"row count mismatch: convert wrote {report['rows_out_convert']}, "

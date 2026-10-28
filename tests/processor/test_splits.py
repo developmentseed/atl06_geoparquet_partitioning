@@ -1,6 +1,6 @@
-import fsspec
 import numpy as np
 from atl06_processor.splits import SplitTable
+from obstore.store import LocalStore
 
 
 def test_from_sample_balanced():
@@ -37,7 +37,7 @@ def test_ranges_cover_hash_space():
 
 
 def test_save_load_roundtrip(tmp_path):
-    fs = fsspec.filesystem("file")
+    store = LocalStore(tmp_path)
     st = SplitTable(np.array([5, 9, 2**62], np.uint64))
-    st.save(fs, str(tmp_path / "splits.parquet"))
-    assert np.array_equal(SplitTable.load(fs, str(tmp_path / "splits.parquet")).cuts, st.cuts)
+    st.save(store, "m/splits.parquet")
+    assert np.array_equal(SplitTable.load(store, "m/splits.parquet").cuts, st.cuts)

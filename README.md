@@ -94,5 +94,6 @@ match, derived from `parquet_metadata()`), row groups scanned/total, bytes read,
 - **Sampling**: 2% of granules, 1% of their rows, by default. The row estimate uses the realized
   granule fraction.
 - **File size**: `target_rows_per_file` defaults to 10 M rows, pending measured bytes/row from the spike.
-- **Granule reads**: the NSIDC filesystem reads each granule whole (`default_cache_type="all"`), so
-  Lambda memory must exceed the largest granule.
+- **S3 access** is via [obstore](https://developmentseed.org/obstore/). Granules are read whole
+  (one GET → `io.BytesIO` → h5py), so Lambda memory must exceed the largest granule. NSIDC
+  credentials come from obstore's `NasaEarthdataCredentialProvider`, which refreshes them itself.

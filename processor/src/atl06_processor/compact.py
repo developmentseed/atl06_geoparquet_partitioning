@@ -7,7 +7,7 @@ import pyarrow as pa
 import pyarrow.compute as pc
 import pyarrow.parquet as pq
 
-from atl06_processor.fragments import write_parquet
+from atl06_processor import storage
 from atl06_processor.paths import RunPaths
 from atl06_processor.schema import SCHEMA, geo_metadata
 
@@ -36,21 +36,20 @@ class FileStats:
         return cls(**json.loads(text))
 
 
-def _read_fragments(fs, files: list[str]) -> pa.Table:
-    """One batched ``cat`` (concurrent on s3fs) for all fragments of a range."""
-    contents = fs.cat(files)
+def _read_fragments(store, keys: list[str]) -> pa.Table:
+    """One concurrent batch of GETs for all fragments of a range."""
+    contents = storage.get_many(store, keys)
     return pa.concat_tables(
-        pq.read_table(pa.BufferReader(contents[p]), schema=SCHEMA) for p in files
+        pq.read_table(pa.BufferReader(contents[k]), schema=SCHEMA) for k in keys
     )
 
 
-def compact_range(fs, paths: RunPaths, range_id: int, row_group_size: int) -> FileStats | None:
+def compact_range(store, paths: RunPaths, range_id: int, row_group_size: int) -> FileStats | None:
     """Returns None (writing nothing) when the range received no rows."""
-    pattern = f"{paths.fragment_dir(range_id)}/*.parquet"
-    files = sorted(fs.glob(pattern))
-    if not files:
+    keys = storage.list_keys(store, paths.fragment_dir(range_id), ".parquet")
+    if not keys:
         return None
-    table = _read_fragments(fs, files).sort_by("stac_hash")
+    table = _read_fragments(store, keys).sort_by("stac_hash")
     bbox = table["bbox"].combine_chunks()
     extent = (
         pc.min(bbox.field("xmin")).as_py(),
@@ -61,13 +60,16 @@ def compact_range(fs, paths: RunPaths, range_id: int, row_group_size: int) -> Fi
     metadata = {**(table.schema.metadata or {}), b"geo": json.dumps(geo_metadata(extent))}
     table = table.replace_schema_metadata(metadata)
     out = paths.data_file(range_id)
-    write_parquet(fs, out, table, row_group_size=row_group_size, write_statistics=True)
+    storage.put_parquet(
+        store, out, table,
+        compression="zstd", row_group_size=row_group_size, write_statistics=True,
+    )
     hashes, times = table["stac_hash"], table["time_ns"].cast(pa.int64())
     stats = FileStats(
         range_id=range_id,
         path=out,
         rows=len(table),
-        bytes=fs.size(out),
+        bytes=storage.size(store, out),
         row_groups=-(-len(table) // row_group_size),
         hash_lo=hashes[0].as_py(),
         hash_hi=hashes[-1].as_py(),
@@ -78,6 +80,5 @@ def compact_range(fs, paths: RunPaths, range_id: int, row_group_size: int) -> Fi
         xmax=extent[2],
         ymax=extent[3],
     )
-    fs.makedirs(paths.compact_stats_dir(), exist_ok=True)
-    fs.pipe(paths.compact_stats(range_id), stats.to_json().encode())
+    storage.put_bytes(store, paths.compact_stats(range_id), stats.to_json().encode())
     return stats
