@@ -14,7 +14,7 @@ atl06-benchmark = { workspace = true }
 atl06-cdk = { workspace = true }
 
 [dependency-groups]
-dev = ["pytest>=8", "ruff>=0.6", "duckdb>=2.0"]
+dev = ["pytest>=8", "ruff>=0.6", "duckdb>=2.0", "nodeenv"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

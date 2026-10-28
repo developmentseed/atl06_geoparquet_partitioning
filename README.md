@@ -26,7 +26,7 @@ row balance, file-size spread, and per-granule fragment fan-out.
 ## Setup and tests
 
 ```bash
-uv sync
+./scripts/setup.sh   # uv sync, Node (nodeenv) + pinned AWS CDK CLI inside .venv
 uv run pytest
 uv run ruff check .
 ```
@@ -40,13 +40,16 @@ All tests run locally against synthetic ATL06-shaped HDF5 files; no AWS or Earth
    aws secretsmanager create-secret --region us-west-2 --name atl06/earthdata \
      --secret-string '{"username":"…","password":"…"}'
    ```
-2. Deploy (Docker required to build the Lambda image; the global `cdk` CLI must be ≥ 2.1146, so use `npx`):
+2. Configure and deploy (Docker must be running to build the Lambda image). Always use the CDK
+   CLI from the venv via `uv run`, not a globally installed one:
    ```bash
-   cd cdk
-   CDK_ACCOUNT=<account-id> npx aws-cdk@latest deploy
+   cp .env.sample .env        # set CDK_ACCOUNT etc.
+   uv run --env-file .env cdk synth
+   uv run --env-file .env cdk deploy
    ```
-   Settings are `CDK_*` env vars (see `cdk/atl06_cdk/settings.py`), e.g. `CDK_TARGET_ROWS_PER_FILE`,
-   `CDK_CONVERT_CONCURRENCY`, `CDK_BUCKET_NAME` (otherwise the stack creates a retained bucket).
+   Settings are `CDK_*` env vars (see `cdk/atl06_cdk/settings.py` and `.env.sample`), e.g.
+   `CDK_TARGET_ROWS_PER_FILE`, `CDK_CONVERT_CONCURRENCY`, `CDK_BUCKET_NAME` (otherwise the stack
+   creates a retained bucket).
 
 ## Spike run
 
@@ -57,8 +60,8 @@ aws stepfunctions start-execution --region us-west-2 \
 ```
 
 Execution input: `run_prefix` (required), optional `start`/`end` (ISO datetimes, default the
-configured year) and `limit` (first N granules by name). For a spike, deploy with
-`CDK_SAMPLE_GRANULE_FRACTION=1.0` and a small `CDK_TARGET_ROWS_PER_FILE` so you get ≥ 10 files.
+configured year) and `limit` (first N granules by name). `.env.sample` already holds spike settings
+(`CDK_SAMPLE_GRANULE_FRACTION=1.0`, a small `CDK_TARGET_ROWS_PER_FILE`) so a spike yields ≥ 10 files.
 
 ## Benchmark
 

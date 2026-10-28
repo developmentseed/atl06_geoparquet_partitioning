@@ -6,3 +6,6 @@ __pycache__/
 cdk/cdk.out/
 .superpowers/
 *.egg-info/
+cdk.out/
+.env
+node_modules/

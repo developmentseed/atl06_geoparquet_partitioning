@@ -18,12 +18,14 @@ from constructs import Construct
 from atl06_cdk.settings import StackSettings
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-ASSET_EXCLUDE = [".venv", ".git", ".superpowers", "cdk/cdk.out", "**/__pycache__", "tests", "docs"]
+ASSET_EXCLUDE = [".venv", ".git", ".superpowers", "cdk.out", "cdk/cdk.out", ".env", "**/__pycache__", "tests", "docs"]
 
 
 class Atl06StacHashStack(Stack):
     def __init__(self, scope: Construct, id: str, *, settings: StackSettings, **kwargs) -> None:
         super().__init__(scope, id, **kwargs)
+        # Must be set before any Distributed Map is created; enables ResultWriterV2 rendering.
+        self.node.set_context("@aws-cdk/aws-stepfunctions:useDistributedMapResultWriterV2", True)
         self.settings = settings
 
         if settings.bucket_name:
@@ -95,7 +97,7 @@ class Atl06StacHashStack(Stack):
                 ),
                 max_concurrency=concurrency,
                 tolerated_failure_percentage=0,
-                result_writer=sfn.ResultWriter(bucket=bucket, prefix=f"results/{id}"),
+                result_writer_v2=sfn.ResultWriterV2(bucket=bucket, prefix=f"results/{id}"),
                 result_path=sfn.JsonPath.DISCARD,
             )
             dmap.item_processor(
