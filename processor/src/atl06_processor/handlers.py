@@ -112,9 +112,10 @@ def plan_splits_handler(event: dict, context=None) -> dict:
     total_granules = len(json.loads(fs.cat(paths.granules_json())))
     sampled_granules = len(json.loads(fs.cat(paths.sample_json())))
     rows, hashes = 0, []
-    for part in sorted(fs.glob(f"{paths.sample_dir()}/*.parquet")):
-        with fs.open(part, "rb") as f:
-            table = pq.read_table(f)
+    parts = sorted(fs.glob(f"{paths.sample_dir()}/*.parquet"))
+    contents = fs.cat(parts) if parts else {}
+    for part in parts:
+        table = pq.read_table(pa.BufferReader(contents[part]))
         rows += int(table.schema.metadata[b"row_count"])
         hashes.append(table["stac_hash"].to_numpy())
     # Use the realized sample fraction, which is exact after rounding and limits.

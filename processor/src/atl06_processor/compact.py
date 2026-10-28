@@ -37,11 +37,11 @@ class FileStats:
 
 
 def _read_fragments(fs, files: list[str]) -> pa.Table:
-    tables = []
-    for path in files:
-        with fs.open(path, "rb") as f:
-            tables.append(pq.read_table(f, schema=SCHEMA))
-    return pa.concat_tables(tables)
+    """One batched ``cat`` (concurrent on s3fs) for all fragments of a range."""
+    contents = fs.cat(files)
+    return pa.concat_tables(
+        pq.read_table(pa.BufferReader(contents[p]), schema=SCHEMA) for p in files
+    )
 
 
 def compact_range(fs, paths: RunPaths, range_id: int, row_group_size: int) -> FileStats | None:

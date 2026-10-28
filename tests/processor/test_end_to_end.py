@@ -4,6 +4,7 @@ from datetime import UTC, datetime, timedelta
 
 import duckdb
 import fsspec
+import fsspec.implementations.local
 import numpy as np
 import pyarrow.parquet as pq
 import pytest
@@ -83,3 +84,40 @@ def test_finalize_detects_row_mismatch(pipeline_run):
     fs.rm(fs.glob(f"{paths.compact_stats_dir()}/*.json")[0])
     with pytest.raises(ValueError, match="row count mismatch"):
         finalize_run(fs, paths)
+
+
+class CountingFS(fsspec.implementations.local.LocalFileSystem):
+    """Counts top-level reads; on s3fs one ``cat(list)`` is fetched concurrently."""
+
+    cachable = False  # fsspec would otherwise hand every test the same counting instance
+
+    def __init__(self):
+        super().__init__()
+        self.cats, self.opens, self._depth = 0, 0, 0
+
+    def cat(self, path, *args, **kwargs):
+        # Count only calls made by the code under test, not fsspec's internal ones.
+        self.cats += self._depth == 0
+        self._depth += 1
+        try:
+            return super().cat(path, *args, **kwargs)
+        finally:
+            self._depth -= 1
+
+    def open(self, path, mode="rb", *args, **kwargs):
+        self.opens += "r" in mode and self._depth == 0
+        return super().open(path, mode, *args, **kwargs)
+
+
+def test_finalize_batches_stats_reads(pipeline_run):
+    _, paths, _ = pipeline_run
+    fs = CountingFS()
+    finalize_run(fs, paths)
+    assert fs.cats == 2 and fs.opens == 0  # one batched read each for convert and compact stats
+
+
+def test_compact_batches_fragment_reads(pipeline_run):
+    _, paths, _ = pipeline_run
+    fs = CountingFS()
+    compact_range(fs, paths, 0, row_group_size=1000)
+    assert fs.cats == 1 and fs.opens == 0

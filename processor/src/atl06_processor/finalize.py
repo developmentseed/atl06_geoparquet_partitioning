@@ -12,7 +12,12 @@ from atl06_processor.paths import RunPaths
 
 
 def _load(fs, directory: str, parse):
-    return [parse(fs.cat(p).decode()) for p in sorted(fs.glob(f"{directory}/*.json"))]
+    """One batched ``cat`` (concurrent on s3fs) for every JSON in ``directory``."""
+    paths = sorted(fs.glob(f"{directory}/*.json"))
+    if not paths:
+        return []
+    contents = fs.cat(paths)
+    return [parse(contents[p].decode()) for p in paths]
 
 
 def _spread(values: list[int]) -> dict:

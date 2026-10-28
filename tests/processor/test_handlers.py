@@ -69,3 +69,16 @@ def test_inventory_overwrite_clears_previous_run(local_env):
     handlers.inventory_handler({"run_prefix": "runs/t", "overwrite": True})
     assert not fs.exists(stale)
     assert fs.exists(f"{bucket}/runs/t/manifest/granules.json")
+
+
+def test_plan_splits_batches_sample_reads(local_env, monkeypatch):
+    from tests.processor.test_end_to_end import CountingFS
+
+    fs, bucket = local_env
+    inv = handlers.inventory_handler({"run_prefix": "runs/t"})
+    sampled = json.loads(fs.cat(f"{bucket}/{inv['sample_key']}"))
+    handlers.sample_handler({"Items": sampled, "BatchInput": {"run_prefix": "runs/t"}})
+    counting = CountingFS()
+    monkeypatch.setattr(handlers, "get_output_fs", lambda: counting)
+    handlers.plan_splits_handler({"run_prefix": "runs/t"})
+    assert counting.opens == 0 and counting.cats == 3  # granules.json, sample.json, sample parts
