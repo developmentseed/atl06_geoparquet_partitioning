@@ -1,0 +1,5 @@
+.venv
+.git
+.superpowers
+**/__pycache__
+cdk/cdk.out
