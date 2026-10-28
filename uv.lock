@@ -214,6 +214,16 @@ wheels = [
 name = "atl06-benchmark"
 version = "0.1.0"
 source = { editable = "benchmark" }
+dependencies = [
+    { name = "duckdb" },
+    { name = "pyarrow" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "duckdb", specifier = ">=2.0" },
+    { name = "pyarrow", specifier = ">=21" },
+]
 
 [[package]]
 name = "atl06-cdk"

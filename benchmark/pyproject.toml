@@ -3,7 +3,10 @@ name = "atl06-benchmark"
 version = "0.1.0"
 description = "Predicate pushdown benchmark for ATL06 GeoParquet layouts"
 requires-python = ">=3.12"
-dependencies = []
+dependencies = ["duckdb>=2.0", "pyarrow>=21"]
+
+[project.scripts]
+atl06-bench = "atl06_benchmark.cli:main"
 
 [build-system]
 requires = ["hatchling"]

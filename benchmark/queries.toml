@@ -1,0 +1,38 @@
+# Default query suite. Datasets are globs; add the stac-hash output and the baseline.
+repeats = 3
+
+[[datasets]]
+name = "stac_hash"
+uri = "s3://REPLACE-BUCKET/runs/spike-1/data/*.parquet"
+
+[[datasets]]
+name = "baseline_month"
+uri = "s3://REPLACE-BUCKET/runs/spike-1/baseline/**/*.parquet"
+
+[[queries]]
+name = "basin_full_year"  # Jakobshavn Isbræ, whole year
+bbox = [-50.5, 68.8, -48.5, 69.4]
+start = "2023-01-01"
+end = "2024-01-01"
+columns = ["time_ns", "h_li", "geometry"]
+
+[[queries]]
+name = "ice_sheet_one_day_greenland"
+bbox = [-74.0, 59.0, -10.0, 84.0]
+start = "2023-07-01"
+end = "2023-07-02"
+columns = ["time_ns", "h_li", "geometry"]
+
+[[queries]]
+name = "ice_sheet_one_week_antarctica"
+bbox = [-180.0, -90.0, 180.0, -60.0]
+start = "2023-03-01"
+end = "2023-03-08"
+columns = ["time_ns", "h_li", "geometry"]
+
+[[queries]]
+name = "basin_one_week"
+bbox = [-50.5, 68.8, -48.5, 69.4]
+start = "2023-07-01"
+end = "2023-07-08"
+columns = ["time_ns", "h_li", "geometry"]
