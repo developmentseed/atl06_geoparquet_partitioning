@@ -1,4 +1,7 @@
-"""Lambda + Step Functions pipeline: Inventory → Sample → PlanSplits → Convert → Compact → Finalize."""
+"""Lambda + Step Functions pipeline.
+
+Inventory → Sample → PlanSplits → Convert → Compact → Finalize.
+"""
 
 from pathlib import Path
 
