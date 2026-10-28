@@ -58,7 +58,7 @@ Two query shapes matter equally, and stac-hash was chosen because it may balance
 
 ## 5. Data source
 
-- **Product:** ATL06 (Land Ice Height), latest available release (v006 or newer).
+- **Product:** ATL06 (Land Ice Height), latest available release: **v007** (v006 has been retired from CMR; checked 2026-10-28).
 - **Time span:** one full calendar year (default 2023; configurable).
 - **Access:** NSIDC Earthdata cloud S3 bucket in **us-west-2**. All compute runs in
   us-west-2. Granule discovery via CMR.

@@ -8,7 +8,7 @@ class Settings(BaseSettings):
 
     year: int = 2023
     short_name: str = "ATL06"
-    version: str = "006"
+    version: str = "007"  # v006 was retired from CMR; 007 is the only ATL06 release
     target_rows_per_file: int = 10_000_000
     row_group_size: int = 500_000
     sample_granule_fraction: float = 0.02

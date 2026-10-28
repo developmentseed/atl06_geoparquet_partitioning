@@ -38,7 +38,7 @@ def test_search_granules_uses_direct_s3_links(monkeypatch):
     monkeypatch.setattr(inventory.earthaccess, "search_data", fake_search)
     start, end = datetime(2023, 1, 1, tzinfo=UTC), datetime(2024, 1, 1, tzinfo=UTC)
     assert inventory.search_granules(Settings(), start, end) == [GRANULES[0]]
-    assert calls["short_name"] == "ATL06" and calls["version"] == "006"
+    assert calls["short_name"] == "ATL06" and calls["version"] == "007"  # v006 is retired in CMR
 
 
 def test_nsidc_store_uses_earthdata_provider(monkeypatch):

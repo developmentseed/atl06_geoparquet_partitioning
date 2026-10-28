@@ -85,6 +85,12 @@ def inventory_handler(event: dict, context=None) -> dict:
             )
         storage.delete_prefix(store, paths.root)
     granules = search_granules(settings, start, end)
+    if not granules:
+        # Fail here, not three steps later: an empty inventory makes every later step vacuous.
+        raise ValueError(
+            f"no {settings.short_name} v{settings.version} granules found in CMR for "
+            f"{start.isoformat()}..{end.isoformat()}; check ATL06_VERSION is still published"
+        )
     table, items, sampled = build_inventory(
         granules, settings.sample_granule_fraction, seed=0, limit=event.get("limit")
     )

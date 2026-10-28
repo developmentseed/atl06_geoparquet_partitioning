@@ -98,3 +98,10 @@ def test_source_store_is_cached_per_bucket(monkeypatch):
     assert handlers.get_source("s3://b1/y/b.h5") == ("b1", "y/b.h5")
     assert handlers.get_source("s3://b2/z.h5") == ("b2", "z.h5")
     assert made == ["b1", "b2"]
+
+
+def test_inventory_fails_loudly_when_search_finds_nothing(local_env, monkeypatch):
+    monkeypatch.setattr(handlers, "search_granules", lambda settings, start, end: [])
+    with pytest.raises(ValueError, match=r"no ATL06 v007 granules"):
+        handlers.inventory_handler({"run_prefix": "runs/empty"})
+    assert not storage.prefix_exists(local_env, "runs/empty")  # nothing half-written
