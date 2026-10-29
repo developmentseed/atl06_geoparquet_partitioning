@@ -257,3 +257,42 @@ possible, a naive baseline such as the same data partitioned by granule or by mo
 - Query engine(s) for the benchmark.
 - Lambda memory sizing and batch sizes per Distributed Map item.
 - Repo layout details beyond `processor/`, `cdk/`, `benchmark/`, `tests/`.
+
+## 14. Amendment (2026-10-29): Iceberg table, bounded Compact, restart from Compact
+
+Motivation: plain `read_parquet` over a glob opens every file footer on every query, and a
+40,000-granule run failed in Compact with `Runtime.OutOfMemory` on one oversized range
+(granule-clustered sampling leaves some ranges well above target).
+
+**Decided by the user**
+- Register the output files in an **Iceberg v2 table** (no data rewrite at registration) so
+  DuckDB `iceberg_scan` prunes whole files from manifest bounds before opening footers.
+- Output schema changes, applied in Compact (staging fragments keep the old schema, so an
+  existing run's `staging/` can be reused):
+  - `time_ns` becomes `int64` nanoseconds since the Unix epoch (SlideRule name and values).
+    Reason: Iceberg v2 has no nanosecond timestamp, and pyiceberg rejects any
+    `timestamp[ns]` column in a file even if the table schema omits it.
+  - New `time: timestamp[us]` (naive UTC) immediately after `time_ns`; time filters use it.
+  - New top-level `longitude`, `latitude: float64` immediately before `geometry`; spatial
+    filters use them. Reason: pyiceberg writes no manifest bounds for struct leaves, so
+    `bbox.*` cannot prune files. The `bbox` covering struct and GeoParquet metadata stay.
+- A run can restart at Compact for an existing prefix (execution input
+  `"from_step": "compact"`), reusing `staging/` and the split table.
+
+**Calls made by Claude (please check)**
+- Compact keeps memory bounded: fragments are downloaded to the Lambda's ephemeral disk,
+  `stac_hash` alone is read to count rows, and a range above `max_rows_per_file`
+  (default 30,000,000) is split at hash quantiles into contiguous sub-ranges, each written
+  as its own file. Sorting uses `sort_indices` and writes one row group at a time, so peak
+  memory is about one copy of a part plus one row group. Every file is now named
+  `data/part-NNNNN-KK.parquet` (range, part); ranges that fit have one part, `KK = 00`.
+- Iceberg metadata lives under `runs/<prefix>/iceberg/`, created by Finalize with pyiceberg's
+  `SqlCatalog` (SQLite in `/tmp`, not persisted) and `add_files`. `report.json` records
+  `iceberg_metadata` (the `metadata.json` URI); no Glue or S3 Tables catalog.
+- Benchmark datasets gain `format = "parquet" | "iceberg"`; for Iceberg, `uri` is the
+  `metadata.json`. Queries filter on `time`, `longitude`, `latitude` (still plain predicates,
+  never `stac_hash`). The month baseline partitions by `month(time)`.
+
+**Verified locally before planning** (pyiceberg 0.12.0, DuckDB 2.0.0, 20 synthetic files):
+`iceberg_scan` opened 1/20 files for a 1-day `time` window and 0/20 for a `stac_hash` range;
+it opened 20/20 for `bbox.*` predicates (no struct-leaf bounds). Not yet verified on S3.
