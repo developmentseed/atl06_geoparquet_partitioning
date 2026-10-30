@@ -82,7 +82,7 @@ def test_plan_splits_batches_sample_reads(local_env, read_calls):  # noqa: F811
     read_calls.update(get_many=0, read_bytes=0)
     handlers.plan_splits_handler({"run_prefix": "runs/t"})
     # granules.json + sample.json, then one concurrent batch for every sample part
-    assert read_calls == {"get_many": 1, "read_bytes": 2}
+    assert read_calls == {"get_many": 1, "read_bytes": 2, "download_many": 0}
 
 
 def test_inventory_rejects_window_outside_configured_year(local_env):

@@ -55,7 +55,7 @@ def pipeline_run(make_granule, tmp_path):
     for srcid, (p, info) in enumerate(zip(srcs, infos, strict=True)):
         convert_granule(src, p.name, store, paths, info, srcid, 2023, splits)
     for rid, _, _ in splits.ranges():
-        compact_range(store, paths, rid, row_group_size=1000)
+        compact_range(store, paths, rid, row_group_size=1000, max_rows_per_file=10_000)
     return store, tmp_path / "out", paths, finalize_run(store, paths)
 
 
@@ -95,7 +95,7 @@ def test_finalize_detects_row_mismatch(pipeline_run):
 @pytest.fixture
 def read_calls(monkeypatch):
     """Counts storage reads: one get_many is a single concurrent batch."""
-    calls = {"get_many": 0, "read_bytes": 0}
+    calls = {"get_many": 0, "read_bytes": 0, "download_many": 0}
     for name in calls:
         original = getattr(storage, name)
 
@@ -110,10 +110,10 @@ def read_calls(monkeypatch):
 def test_finalize_batches_stats_reads(pipeline_run, read_calls):
     store, _, paths, _ = pipeline_run
     finalize_run(store, paths)
-    assert read_calls == {"get_many": 2, "read_bytes": 0}  # convert stats, compact stats
+    assert read_calls == {"get_many": 2, "read_bytes": 0, "download_many": 0}
 
 
 def test_compact_batches_fragment_reads(pipeline_run, read_calls):
     store, _, paths, _ = pipeline_run
-    compact_range(store, paths, 0, row_group_size=1000)
-    assert read_calls == {"get_many": 1, "read_bytes": 0}
+    compact_range(store, paths, 0, row_group_size=1000, max_rows_per_file=10_000)
+    assert read_calls == {"get_many": 0, "read_bytes": 0, "download_many": 1}

@@ -171,8 +171,10 @@ def compact_handler(event: dict, context=None) -> list[dict]:
     store = get_output_store()
     results = []
     for item in event["Items"]:
-        stats = compact_range(store, paths, item["range_id"], settings.row_group_size)
-        results.append({"range_id": item["range_id"], "rows": stats.rows if stats else 0})
+        parts = compact_range(
+            store, paths, item["range_id"], settings.row_group_size, settings.max_rows_per_file
+        )
+        results.append({"range_id": item["range_id"], "rows": sum(p.rows for p in parts)})
     return results
 
 

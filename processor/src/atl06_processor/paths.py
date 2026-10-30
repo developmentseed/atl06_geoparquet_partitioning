@@ -50,14 +50,14 @@ class RunPaths:
     def data_dir(self) -> str:
         return self._p("data")
 
-    def data_file(self, range_id: int) -> str:
-        return self._p(f"data/part-{range_id:05d}.parquet")
+    def data_file(self, range_id: int, part: int) -> str:
+        return self._p(f"data/part-{range_id:05d}-{part:02d}.parquet")
 
     def compact_stats_dir(self) -> str:
         return self._p("stats/compact")
 
-    def compact_stats(self, range_id: int) -> str:
-        return f"{self.compact_stats_dir()}/{range_id:05d}.json"
+    def compact_stats(self, range_id: int, part: int) -> str:
+        return f"{self.compact_stats_dir()}/{range_id:05d}-{part:02d}.json"
 
     def dataset_manifest(self) -> str:
         return self._p("manifest/dataset.parquet")

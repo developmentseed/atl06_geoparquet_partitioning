@@ -26,5 +26,6 @@ def test_sample_granule_counts_and_subsamples(make_granule, tmp_path):
 def test_run_paths_layout():
     p = RunPaths("runs/x")
     assert p.fragment(3, NAME) == "runs/x/staging/range=00003/" + NAME[:-3] + ".parquet"
-    assert p.data_file(12) == "runs/x/data/part-00012.parquet"
+    assert p.data_file(12, 3) == "runs/x/data/part-00012-03.parquet"
+    assert p.compact_stats(12, 3) == "runs/x/stats/compact/00012-03.json"
     assert p.sample_part(NAME) == "runs/x/sample/" + NAME[:-3] + ".parquet"

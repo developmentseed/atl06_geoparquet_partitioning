@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+from contextlib import contextmanager
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -111,6 +112,15 @@ def put_parquet(store: ObjectStore, key: str, table: pa.Table, **kwargs) -> None
     """Stream Parquet straight into a multipart upload; no whole-file buffer."""
     with obstore.open_writer(store, key) as writer:
         pq.write_table(table, pa.PythonFile(_ObstoreSink(writer), mode="w"), **kwargs)
+
+
+@contextmanager
+def parquet_writer(store: ObjectStore, key: str, schema: pa.Schema, **kwargs):
+    """A ``pq.ParquetWriter`` streaming into a multipart upload, one row group at a time."""
+    with obstore.open_writer(store, key) as writer:
+        sink = pa.PythonFile(_ObstoreSink(writer), mode="w")
+        with pq.ParquetWriter(sink, schema, **kwargs) as parquet:
+            yield parquet
 
 
 def put_json(store: ObjectStore, key: str, obj) -> None:

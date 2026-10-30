@@ -11,6 +11,8 @@ class Settings(BaseSettings):
     version: str = "007"  # v006 was retired from CMR; 007 is the only ATL06 release
     target_rows_per_file: int = 10_000_000
     row_group_size: int = 500_000
+    # Compact splits a range above this into several files, bounding Lambda memory.
+    max_rows_per_file: int = 25_000_000  # ~195 B/row Arrow peak measured → ~5 GB of 10 GB
     sample_granule_fraction: float = 0.02
     sample_row_fraction: float = 0.01
     bucket: str = ""
