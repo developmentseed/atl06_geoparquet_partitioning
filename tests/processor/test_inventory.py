@@ -1,6 +1,7 @@
 from datetime import UTC, datetime
 from types import SimpleNamespace
 
+import pytest
 from atl06_processor import inventory
 from atl06_processor.config import Settings
 from atl06_processor.inventory import build_inventory
@@ -28,17 +29,59 @@ def test_build_inventory_samples_at_least_one():
     assert len(sampled) == 1
 
 
-def test_search_granules_uses_direct_s3_links(monkeypatch):
-    calls = {}
+def umm_item(url_type_pairs):
+    return {"umm": {"RelatedUrls": [{"Type": t, "URL": u} for t, u in url_type_pairs]}}
 
-    def fake_search(**kwargs):
-        calls.update(kwargs)
-        return [SimpleNamespace(data_links=lambda access: [GRANULES[0][1]])]
 
-    monkeypatch.setattr(inventory.earthaccess, "search_data", fake_search)
+def granule_item(name):
+    base = "nsidc-cumulus-prod-protected/ATLAS/ATL06/007/2023/01/01"
+    return umm_item([
+        ("GET DATA", f"https://data.nsidc.earthdatacloud.nasa.gov/{base}/{name}"),
+        ("GET DATA VIA DIRECT ACCESS", f"s3://{base}/{name}"),
+        ("VIEW RELATED INFORMATION", f"s3://{base}/{name.removesuffix('.h5')}.iso.xml"),
+    ])
+
+
+class FakeCMR:
+    """Two pages linked by CMR-Search-After, then an empty page."""
+
+    def __init__(self, pages):
+        self.pages, self.requests = pages, []
+
+    def get(self, url, params, headers, timeout):
+        self.requests.append((url, dict(params), dict(headers)))
+        i = len(self.requests) - 1
+        items = self.pages[i] if i < len(self.pages) else []
+        return SimpleNamespace(
+            json=lambda: {"items": items},
+            headers={"CMR-Search-After": f"token-{i}"} if items else {},
+            raise_for_status=lambda: None,
+        )
+
+
+def test_search_granules_pages_cmr_and_keeps_direct_h5_links(monkeypatch):
+    names = [f"ATL06_2023010{i}000000_0{i}000201_007_01.h5" for i in range(1, 4)]
+    cmr = FakeCMR([[granule_item(names[0]), granule_item(names[1])], [granule_item(names[2])]])
+    monkeypatch.setattr(inventory, "_session", lambda: cmr)
     start, end = datetime(2023, 1, 1, tzinfo=UTC), datetime(2024, 1, 1, tzinfo=UTC)
-    assert inventory.search_granules(Settings(), start, end) == [GRANULES[0]]
-    assert calls["short_name"] == "ATL06" and calls["version"] == "007"  # v006 is retired in CMR
+    out = inventory.search_granules(Settings(), start, end)
+    base = "s3://nsidc-cumulus-prod-protected/ATLAS/ATL06/007/2023/01/01"
+    assert out == [(n, f"{base}/{n}") for n in names]
+    url, params, headers = cmr.requests[0]
+    assert url.endswith("/search/granules.umm_json")
+    assert params["short_name"] == "ATL06" and params["version"] == "007"  # v006 is retired
+    assert params["temporal"] == "2023-01-01T00:00:00Z,2024-01-01T00:00:00Z"
+    assert "CMR-Search-After" not in headers
+    assert cmr.requests[1][2]["CMR-Search-After"] == "token-0"
+    assert len(cmr.requests) == 3
+
+
+def test_search_granules_names_a_granule_without_direct_link(monkeypatch):
+    cmr = FakeCMR([[{"meta": {"native-id": "ATL06_X.h5"}, **umm_item([("GET DATA", "https://x/a.h5")])}]])
+    monkeypatch.setattr(inventory, "_session", lambda: cmr)
+    start, end = datetime(2023, 1, 1, tzinfo=UTC), datetime(2024, 1, 1, tzinfo=UTC)
+    with pytest.raises(ValueError, match="ATL06_X.h5"):
+        inventory.search_granules(Settings(), start, end)
 
 
 def test_nsidc_store_uses_earthdata_provider(monkeypatch):
