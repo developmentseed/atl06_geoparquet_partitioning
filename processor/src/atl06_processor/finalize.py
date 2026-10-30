@@ -9,6 +9,7 @@ import pyarrow as pa
 from atl06_processor import storage
 from atl06_processor.compact import FileStats
 from atl06_processor.fragments import ConvertStats
+from atl06_processor.iceberg import register_table
 from atl06_processor.paths import RunPaths
 
 
@@ -26,8 +27,14 @@ def _spread(values: list[int]) -> dict:
     return {"min": int(a.min()), "median": float(np.median(a)), "max": int(a.max())}
 
 
-def finalize_run(store, paths: RunPaths) -> dict:
-    """Writes manifest/dataset.parquet and manifest/report.json; raises on row loss."""
+def finalize_run(
+    store, paths: RunPaths, root_uri: str | None = None, iceberg_properties: dict | None = None
+) -> dict:
+    """Writes manifest/dataset.parquet and manifest/report.json; raises on row loss.
+
+    With ``root_uri`` (the store's root, e.g. ``s3://bucket``), also registers the data
+    files as an Iceberg table and records its metadata.json URI in the report.
+    """
     converts = _load(store, paths.convert_stats_dir(), ConvertStats.from_json)
     files = _load(store, paths.compact_stats_dir(), FileStats.from_json)
 
@@ -56,6 +63,15 @@ def finalize_run(store, paths: RunPaths) -> dict:
     if files:
         manifest = pa.Table.from_pylist([asdict(f) for f in files])
         storage.put_parquet(store, paths.dataset_manifest(), manifest, compression="zstd")
+    # Only a complete run becomes a table.
+    if root_uri and files and report["rows_out_convert"] == report["rows_out_compact"]:
+        report["iceberg_metadata"] = register_table(
+            root_uri,
+            paths,
+            [f.path for f in files],
+            {f.path: f.nan_counts for f in files},
+            iceberg_properties,
+        )
     storage.put_bytes(store, paths.report(), json.dumps(report, indent=2).encode())
     if report["rows_out_convert"] != report["rows_out_compact"]:
         raise ValueError(

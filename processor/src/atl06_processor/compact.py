@@ -8,7 +8,8 @@ contiguous parts, and each part is sorted by index and written one row group at 
 import json
 import math
 import tempfile
-from dataclasses import asdict, dataclass
+from collections import Counter
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 import numpy as np
@@ -19,7 +20,7 @@ import pyarrow.parquet as pq
 
 from atl06_processor import storage
 from atl06_processor.paths import RunPaths
-from atl06_processor.schema import OUTPUT_SCHEMA, SCHEMA, geo_metadata, to_output
+from atl06_processor.schema import OUTPUT_SCHEMA, SCHEMA, geo_metadata, nan_counts, to_output
 
 
 @dataclass
@@ -38,6 +39,8 @@ class FileStats:
     ymin: float
     xmax: float
     ymax: float
+    # Per float column; recorded in the Iceberg manifest so engines can prune on lower bounds.
+    nan_counts: dict[str, int] = field(default_factory=dict)
 
     def to_json(self) -> str:
         return json.dumps(asdict(self))
@@ -89,11 +92,13 @@ def _write_part(
     schema = OUTPUT_SCHEMA.with_metadata({b"geo": json.dumps(geo_metadata(extent))})
     order = pc.sort_indices(table["stac_hash"])
     out = paths.data_file(range_id, part)
+    nans = Counter()
     with storage.parquet_writer(
         store, out, schema, compression="zstd", write_statistics=True
     ) as writer:
         for start in range(0, len(order), row_group_size):
             rows = to_output(table.take(order[start : start + row_group_size]))
+            nans.update(nan_counts(rows))
             writer.write_table(rows.replace_schema_metadata(schema.metadata),
                                row_group_size=row_group_size)
     stats = FileStats(
@@ -111,6 +116,7 @@ def _write_part(
         ymin=extent[1],
         xmax=extent[2],
         ymax=extent[3],
+        nan_counts=dict(nans),
     )
     storage.put_bytes(store, paths.compact_stats(range_id, part), stats.to_json().encode())
     return stats

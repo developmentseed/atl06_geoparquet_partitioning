@@ -106,3 +106,12 @@ def geo_metadata(bbox: tuple[float, float, float, float]) -> dict:
             }
         },
     }
+
+
+def nan_counts(table: pa.Table) -> dict[str, int]:
+    """NaN count per floating-point column (nulls are not NaN)."""
+    return {
+        f.name: pc.sum(pc.is_nan(table[f.name])).as_py() or 0
+        for f in table.schema
+        if pa.types.is_floating(f.type)
+    }

@@ -158,3 +158,4 @@ def test_file_stats_json_roundtrip(staged):
     assert stats.time_min_ns == pc.min(t["time_ns"]).as_py()
     assert stats.time_max_ns == pc.max(t["time_ns"]).as_py()
     assert stats.xmin == pc.min(t["longitude"]).as_py()
+    assert stats.nan_counts["longitude"] == 0 and "h_li" in stats.nan_counts

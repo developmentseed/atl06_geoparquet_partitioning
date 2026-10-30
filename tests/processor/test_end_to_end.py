@@ -56,7 +56,8 @@ def pipeline_run(make_granule, tmp_path):
         convert_granule(src, p.name, store, paths, info, srcid, 2023, splits)
     for rid, _, _ in splits.ranges():
         compact_range(store, paths, rid, row_group_size=1000, max_rows_per_file=10_000)
-    return store, tmp_path / "out", paths, finalize_run(store, paths)
+    root = tmp_path / "out"
+    return store, root, paths, finalize_run(store, paths, root_uri=root.as_uri())
 
 
 def read(store, key, **kwargs):

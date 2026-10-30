@@ -62,5 +62,8 @@ class RunPaths:
     def dataset_manifest(self) -> str:
         return self._p("manifest/dataset.parquet")
 
+    def iceberg_dir(self) -> str:
+        return self._p("iceberg")
+
     def report(self) -> str:
         return self._p("manifest/report.json")
