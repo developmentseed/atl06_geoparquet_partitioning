@@ -1,6 +1,7 @@
 from datetime import UTC, datetime, timedelta
 
 import numpy as np
+import obstore
 import pytest
 from atl06_processor import handlers, storage
 from obstore.store import LocalStore
@@ -145,3 +146,21 @@ def test_inventory_fails_loudly_when_search_finds_nothing(local_env, monkeypatch
     with pytest.raises(ValueError, match=r"no ATL06 v007 granules"):
         handlers.inventory_handler({"run_prefix": "runs/empty"})
     assert not storage.prefix_exists(local_env, "runs/empty")  # nothing half-written
+
+
+def test_prepare_compact_requires_complete_convert(local_env):
+    store = local_env
+    full_run(store)
+    obstore.delete(store, storage.list_keys(store, "runs/t/stats/convert")[0])
+    with pytest.raises(ValueError, match="Convert finished 5 of 6 granules"):
+        handlers.prepare_compact_handler({"run_prefix": "runs/t", "from_step": "compact"})
+    assert storage.list_keys(store, "runs/t/data")  # nothing deleted
+
+
+def test_prepare_compact_validates_before_deleting(local_env):
+    store = local_env
+    plan, _ = full_run(store)
+    obstore.delete(store, plan["ranges_key"])
+    with pytest.raises(ValueError, match="ranges.json"):
+        handlers.prepare_compact_handler({"run_prefix": "runs/t", "from_step": "compact"})
+    assert storage.list_keys(store, "runs/t/data") and storage.list_keys(store, "runs/t/iceberg")

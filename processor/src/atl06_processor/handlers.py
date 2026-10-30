@@ -176,17 +176,26 @@ def prepare_compact_handler(event: dict, context=None) -> dict:
     """Restarts a run at Compact: keeps staging/ and the split table, drops later outputs."""
     _, paths, prefix = _context(event)
     store = get_output_store()
-    if not storage.exists(store, paths.splits()):
+    # Validate everything before deleting anything: a refused restart keeps the old outputs.
+    for required in (paths.splits(), paths.ranges_json(), paths.granules_json()):
+        if not storage.exists(store, required):
+            raise ValueError(
+                f"run prefix {prefix!r} has no {required}; only a run that finished "
+                "PlanSplits and Convert can restart at Compact"
+            )
+    # The full path's ConvertMap tolerates no failures; this path must not either, or a
+    # partial Convert would compact and finalize as a complete-looking dataset.
+    granules = len(storage.get_json(store, paths.granules_json()))
+    converted = len(storage.list_keys(store, paths.convert_stats_dir(), ".json"))
+    if converted != granules:
         raise ValueError(
-            f"run prefix {prefix!r} has no {paths.splits()}; only a run that finished "
-            "PlanSplits and Convert can restart at Compact"
+            f"Convert finished {converted} of {granules} granules under {prefix!r}; "
+            "rerun the full pipeline (with overwrite) instead of restarting at Compact"
         )
+    ranges = len(storage.get_json(store, paths.ranges_json()))
     for stale in (paths.data_dir(), paths.compact_stats_dir(), paths.iceberg_dir()):
         storage.delete_prefix(store, stale)
-    return {
-        "ranges_key": paths.ranges_json(),
-        "ranges": len(storage.get_json(store, paths.ranges_json())),
-    }
+    return {"ranges_key": paths.ranges_json(), "ranges": ranges}
 
 
 def compact_handler(event: dict, context=None) -> list[dict]:
