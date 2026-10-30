@@ -17,7 +17,8 @@ class Query:
 @dataclass(frozen=True)
 class Dataset:
     name: str
-    uri: str
+    uri: str  # parquet: a glob; iceberg: the table's metadata.json
+    format: str = "parquet"
 
 
 @dataclass
@@ -39,5 +40,5 @@ def load_suite(path: str | Path) -> Suite:
         )
         for q in raw["queries"]
     ]
-    datasets = [Dataset(d["name"], d["uri"]) for d in raw["datasets"]]
+    datasets = [Dataset(d["name"], d["uri"], d.get("format", "parquet")) for d in raw["datasets"]]
     return Suite(datasets, queries, raw.get("repeats", 3))

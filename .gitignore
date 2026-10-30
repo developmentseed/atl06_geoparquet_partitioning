@@ -9,3 +9,4 @@ cdk/cdk.out/
 cdk.out/
 .env
 node_modules/
+benchmark/queries.toml

@@ -10,7 +10,7 @@ def build_baseline(
     source = f"read_parquet('{src_uri}')"
     con.execute(
         f"""
-        COPY (SELECT *, month(time_ns) AS month FROM {source} ORDER BY srcid, time_ns)
+        COPY (SELECT *, month(time) AS month FROM {source} ORDER BY srcid, time)
         TO '{dst_uri}'
         (FORMAT parquet, PARTITION_BY (month), ROW_GROUP_SIZE {row_group_size},
          COMPRESSION zstd, OVERWRITE_OR_IGNORE)

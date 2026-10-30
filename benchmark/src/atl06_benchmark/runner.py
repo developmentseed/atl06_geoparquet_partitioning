@@ -10,7 +10,7 @@ import duckdb
 import pyarrow as pa
 
 from atl06_benchmark.config import Suite
-from atl06_benchmark.sql import build_files_scanned_sql, build_sql
+from atl06_benchmark.sql import build_files_scanned_sql, build_sql, data_files_sql
 
 
 @dataclass
@@ -68,6 +68,8 @@ def run_query(
 
 def connect(suite: Suite) -> duckdb.DuckDBPyConnection:
     con = duckdb.connect()
+    if any(d.format == "iceberg" for d in suite.datasets):
+        con.execute("INSTALL iceberg; LOAD iceberg")
     if any(d.uri.startswith("s3://") for d in suite.datasets):
         con.execute("INSTALL httpfs; LOAD httpfs; INSTALL aws; LOAD aws")
         con.execute("CREATE SECRET (TYPE s3, PROVIDER credential_chain)")
@@ -78,11 +80,11 @@ def run_suite(suite: Suite) -> pa.Table:
     con = connect(suite)
     results = []
     for ds in suite.datasets:
-        files_total = con.execute(f"SELECT count(*) FROM glob('{ds.uri}')").fetchall()[0][0]
+        files = [row[0] for row in con.execute(data_files_sql(ds)).fetchall()]
         for q in suite.queries:
-            sql = build_sql(ds.uri, q)
-            scanned = con.execute(build_files_scanned_sql(ds.uri, q)).fetchall()[0][0]
+            sql = build_sql(ds, q)
+            scanned = con.execute(build_files_scanned_sql(files, q)).fetchall()[0][0]
             for r in range(suite.repeats):
-                metrics = run_query(con, sql, files_total, ds.name, q.name, r, scanned)
+                metrics = run_query(con, sql, len(files), ds.name, q.name, r, scanned)
                 results.append(asdict(metrics))
     return pa.Table.from_pylist(results)

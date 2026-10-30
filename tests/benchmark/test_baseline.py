@@ -7,9 +7,9 @@ from atl06_benchmark.cli import main
 
 
 def write_source(path, n=5_000):
-    t = pa.array(np.linspace(1_672_531_200, 1_704_067_199, n).astype("int64") * 10**9,
-                 pa.timestamp("ns"))
-    pq.write_table(pa.table({"time_ns": t, "srcid": np.arange(n, dtype=np.int32) % 7,
+    t = pa.array(np.linspace(1_672_531_200, 1_704_067_199, n).astype("int64") * 10**6,
+                 pa.timestamp("us"))
+    pq.write_table(pa.table({"time": t, "srcid": np.arange(n, dtype=np.int32) % 7,
                              "h_li": np.ones(n, np.float32)}), path)
 
 
