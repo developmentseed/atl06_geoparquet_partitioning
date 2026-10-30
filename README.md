@@ -15,13 +15,27 @@ Design: `docs/superpowers/specs/2026-10-28-atl06-stac-hash-geoparquet-design.md`
 
 ```
 Inventory ─▶ Sample (Distributed Map) ─▶ PlanSplits ─▶ Convert (Distributed Map) ─▶ Compact (Distributed Map) ─▶ Finalize
- CMR search   hash a granule sample      quantile cuts   route rows to             sort one range,
- srcid table                             → split table   staging/range=N/          write data/part-N.parquet
+ CMR search   hash a granule sample      quantile cuts   route rows to             sort one range,             report.json,
+ srcid table                             → split table   staging/range=N/          write data/part-N-K.parquet Iceberg table
 ```
 
 Each output file covers one contiguous `stac_hash` range, chosen at row-count quantiles so files hold
-roughly equal row counts; rows inside are sorted by `stac_hash`. `manifest/report.json` records
-row balance, file-size spread, and per-granule fragment fan-out.
+roughly equal row counts; rows inside are sorted by `stac_hash`. A range above
+`max_rows_per_file` (default 25M, the 10 GB Compact Lambda's limit at ~330 B/row peak) is split at
+hash quantiles into several contiguous files, `part-NNNNN-00`, `-01`, … `manifest/report.json`
+records row balance, file-size spread, per-granule fragment fan-out, and `iceberg_metadata`.
+
+Finalize registers every data file in an **Iceberg v2 table** under `runs/<prefix>/iceberg/`
+(pyiceberg `add_files`; files are not rewritten; no catalog service). Readers open the
+`metadata.json` named in `report.json`, e.g. DuckDB `iceberg_scan('<uri>')`, and skip whole files
+from the manifest bounds before opening any footer.
+
+Output columns differ from the staging fragments in three ways, all for Iceberg:
+`time_ns` is `int64` nanoseconds (SlideRule's name and values; Iceberg v2 has no nanosecond
+timestamp), `time` is a `timestamp[us]` for filtering, and top-level `longitude`/`latitude` duplicate
+the point's bbox (Iceberg manifests carry no bounds for `bbox.*` struct fields). Compact also records
+per-file NaN counts of float columns into the manifest; without them DuckDB cannot prune doubles on
+`>=`.
 
 ## Setup and tests
 
@@ -48,7 +62,7 @@ All tests run locally against synthetic ATL06-shaped HDF5 files; no AWS or Earth
    uv run --env-file .env cdk deploy
    ```
    Settings are `CDK_*` env vars (see `cdk/atl06_cdk/settings.py` and `.env.sample`), e.g.
-   `CDK_TARGET_ROWS_PER_FILE`, `CDK_CONVERT_CONCURRENCY`, `CDK_BUCKET_NAME` (otherwise the stack
+   `CDK_TARGET_ROWS_PER_FILE`, `CDK_MAX_ROWS_PER_FILE`, `CDK_CONVERT_CONCURRENCY`, `CDK_BUCKET_NAME` (otherwise the stack
    creates a retained bucket).
 
 ## Spike run
@@ -61,7 +75,16 @@ aws stepfunctions start-execution --region us-west-2 \
 
 Execution input: `run_prefix` (required; single-use, so pass `"overwrite": true` to delete and
 redo a previous run), optional `start`/`end` (ISO datetimes within `ATL06_YEAR`, default the whole
-year) and `limit` (N granules evenly spaced through the year, so a spike spans all of it). `.env.sample` already holds spike settings
+year) and `limit` (N granules evenly spaced through the year, so a spike spans all of it).
+
+To redo only Compact and Finalize for a run that finished Convert (e.g. after a Compact failure or a
+code change), start a new execution with `"from_step": "compact"`. It keeps `staging/` and the
+split table, deletes `data/`, `stats/compact/` and `iceberg/`, and downloads nothing from NSIDC:
+
+```bash
+aws stepfunctions start-execution --region us-west-2 --state-machine-arn <PipelineArn> \
+  --input '{"run_prefix": "runs/<prefix>", "from_step": "compact"}'
+``` `.env.sample` already holds spike settings
 (`CDK_SAMPLE_GRANULE_FRACTION=1.0`, a small `CDK_TARGET_ROWS_PER_FILE`) so a spike yields ≥ 10 files.
 
 ## Benchmark
@@ -69,23 +92,29 @@ year) and `limit` (N granules evenly spaced through the year, so a spike spans a
 Run from us-west-2 (EC2 or CloudShell) so network effects are consistent.
 
 ```bash
-uv run atl06-bench baseline --src 's3://<bucket>/runs/spike-1/data/*.parquet' \
-  --dst 's3://<bucket>/runs/spike-1/baseline' --row-group-size 500000
-# edit benchmark/queries.toml dataset URIs, then:
+cp benchmark/queries.default.toml benchmark/queries.toml   # local, git-ignored; set the URIs
+uv run atl06-bench baseline --src 's3://<bucket>/runs/<prefix>/data/*.parquet' \
+  --dst 's3://<bucket>/runs/<prefix>/baseline' --row-group-size 500000   # optional
 uv run atl06-bench run --suite benchmark/queries.toml --out results.parquet
 ```
 
-Queries use only plain predicates on `time_ns` and `bbox.*`; pruning is DuckDB's own pushdown.
-Metrics per query and repeat: `files_total`, `footers_read` (DuckDB opens every footer, so this is
-not a pruning measure), `files_scanned` (files with at least one row group whose statistics can
-match, derived from `parquet_metadata()`), row groups scanned/total, bytes read, rows, wall time.
+Each dataset is `format = "parquet"` (a glob; DuckDB opens every footer) or `format = "iceberg"`
+(`uri` = `report.json` `iceberg_metadata`; files are pruned from manifests first). Queries use only
+plain predicates on `time`, `longitude` and `latitude`; pruning is DuckDB's own pushdown. Runs
+written before these columns existed (`spike-1`, `spike-2`) cannot be queried with them; restart
+them at Compact first.
+Metrics per query and repeat: `files_total`, `footers_read` (files DuckDB actually opened: all of
+them for a glob, only manifest survivors for Iceberg), `files_scanned` (files with at least one row
+group whose statistics can match, derived from `parquet_metadata()`), row groups scanned/total,
+bytes read, rows, wall time.
 
 ## Assumptions
 
 - **SlideRule conventions**: `gt` gt1l=10 … gt3r=60; `spot` from the beam's `atlas_spot_number`
   attribute; `srcid` indexes `manifest/granules.parquet`; `rgt`, `cycle`, `region` from the granule name.
-- **Time**: `time_ns` = UTC, from `atlas_sdp_gps_epoch + delta_time` with a constant 18 s GPS−UTC
-  offset (valid for all dates since 2017-01-01).
+- **Time**: UTC, from `atlas_sdp_gps_epoch + delta_time` with a constant 18 s GPS−UTC offset
+  (valid for all dates since 2017-01-01). `time_ns` is int64 nanoseconds since the Unix epoch;
+  `time` is the same instant truncated to microseconds.
 - **Fill values** (`_FillValue` attributes) become null; no rows are dropped for quality.
 - **Year membership** is by each point's own timestamp, half-open `[Jan 1, Jan 1 next year)`.
 - **Unhashable rows** (fill `latitude`, `longitude` or `delta_time`) are dropped and counted as

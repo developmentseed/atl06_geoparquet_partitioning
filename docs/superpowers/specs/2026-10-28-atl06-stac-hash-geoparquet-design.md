@@ -282,10 +282,13 @@ Motivation: plain `read_parquet` over a glob opens every file footer on every qu
 **Calls made by Claude (please check)**
 - Compact keeps memory bounded: fragments are downloaded to the Lambda's ephemeral disk,
   `stac_hash` alone is read to count rows, and a range above `max_rows_per_file`
-  (default 30,000,000) is split at hash quantiles into contiguous sub-ranges, each written
+  (default 25,000,000; measured peak RSS ≈300–330 B/row on Linux) is split at hash quantiles into contiguous sub-ranges, each written
   as its own file. Sorting uses `sort_indices` and writes one row group at a time, so peak
   memory is about one copy of a part plus one row group. Every file is now named
   `data/part-NNNNN-KK.parquet` (range, part); ranges that fit have one part, `KK = 00`.
+- Compact records per-file NaN counts of float columns and Finalize writes them into the
+  manifest: DuckDB does not prune float columns on `>=`/`>` without them (NaN sorts above every
+  number), so without this `longitude`/`latitude` would prune on upper bounds only.
 - Iceberg metadata lives under `runs/<prefix>/iceberg/`, created by Finalize with pyiceberg's
   `SqlCatalog` (SQLite in `/tmp`, not persisted) and `add_files`. `report.json` records
   `iceberg_metadata` (the `metadata.json` URI); no Glue or S3 Tables catalog.
