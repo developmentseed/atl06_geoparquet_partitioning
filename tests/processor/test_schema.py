@@ -1,5 +1,6 @@
 import pyarrow as pa
-from atl06_processor.schema import GT_CODES, SCHEMA, geo_metadata
+import pyarrow.compute as pc
+from atl06_processor.schema import GT_CODES, OUTPUT_SCHEMA, SCHEMA, geo_metadata, to_output
 
 
 def test_schema_column_order():
@@ -35,3 +36,49 @@ def test_geo_metadata_has_covering():
     assert md["version"] == "1.1.0" and col["encoding"] == "WKB"
     assert col["covering"]["bbox"]["xmin"] == ["bbox", "xmin"]
     assert col["bbox"] == [-1.0, -2.0, 3.0, 4.0]
+
+
+def test_output_schema_layout():
+    names = OUTPUT_SCHEMA.names
+    assert names[:2] == ["time_ns", "time"]
+    assert names[names.index("geometry") - 2 : names.index("geometry")] == ["longitude", "latitude"]
+    assert set(names) == set(SCHEMA.names) | {"time", "longitude", "latitude"}
+    assert OUTPUT_SCHEMA.field("time_ns").type == pa.int64()
+    assert OUTPUT_SCHEMA.field("time").type == pa.timestamp("us")
+    assert OUTPUT_SCHEMA.field("longitude").type == pa.float64()
+    assert OUTPUT_SCHEMA.field("latitude").type == pa.float64()
+    # Iceberg v2 (via pyiceberg) rejects any nanosecond timestamp column in a file.
+    assert not any(pa.types.is_timestamp(f.type) and f.type.unit == "ns" for f in OUTPUT_SCHEMA)
+    assert OUTPUT_SCHEMA.field("geometry").metadata == SCHEMA.field("geometry").metadata
+
+
+NS = [1_688_169_600_123_456_789, None, 1_700_000_000_000_000_001]
+
+
+def _source_table():
+    n = 3
+    cols = {f.name: pa.nulls(n, f.type) for f in SCHEMA}
+    cols["time_ns"] = pa.array(NS, pa.timestamp("ns"))
+    cols["bbox"] = pa.StructArray.from_arrays(
+        [pa.array([1.5, 2.5, -3.5]), pa.array([-70.0, 80.0, 0.25]),
+         pa.array([1.5, 2.5, -3.5]), pa.array([-70.0, 80.0, 0.25])],
+        names=["xmin", "ymin", "xmax", "ymax"],
+    )
+    return pa.table(cols, schema=SCHEMA)
+
+
+def test_to_output_values():
+    src = _source_table()
+    out = to_output(src)
+    assert out.schema.equals(OUTPUT_SCHEMA, check_metadata=False)
+    assert out["time_ns"].to_pylist() == NS
+    assert out["time"].to_pylist() == pc.cast(
+        src["time_ns"], pa.timestamp("us"), safe=False).to_pylist()
+    assert out["longitude"].to_pylist() == [1.5, 2.5, -3.5]
+    assert out["latitude"].to_pylist() == [-70.0, 80.0, 0.25]
+    assert out["bbox"].equals(src["bbox"])
+
+
+def test_to_output_accepts_record_batch():
+    batch = _source_table().to_batches()[0]
+    assert to_output(batch).num_rows == 3

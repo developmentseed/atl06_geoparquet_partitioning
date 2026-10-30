@@ -3,6 +3,7 @@
 import json
 
 import pyarrow as pa
+import pyarrow.compute as pc
 from pyproj import CRS
 
 GT_CODES: dict[str, int] = {
@@ -53,6 +54,39 @@ _COLUMNS: list[pa.Field] = [
 PRE_HASH_SCHEMA = pa.schema([*_COLUMNS, pa.field("bbox", BBOX_TYPE)])
 
 SCHEMA = pa.schema([*_COLUMNS, pa.field("stac_hash", pa.uint64()), pa.field("bbox", BBOX_TYPE)])
+
+
+def _output_fields() -> list[pa.Field]:
+    fields = []
+    for f in SCHEMA:
+        if f.name == "time_ns":
+            # Iceberg v2 has no nanosecond timestamp, so keep SlideRule's values as plain int64
+            # and add a microsecond timestamp for filtering.
+            fields += [pa.field("time_ns", pa.int64()), pa.field("time", pa.timestamp("us"))]
+        elif f.name == "geometry":
+            # Top-level point coordinates: Iceberg manifests carry bounds for these, not bbox.*.
+            fields += [pa.field("longitude", pa.float64()), pa.field("latitude", pa.float64()), f]
+        else:
+            fields.append(f)
+    return fields
+
+
+# Schema of compacted output files; staging fragments keep SCHEMA.
+OUTPUT_SCHEMA = pa.schema(_output_fields())
+
+
+def to_output(data: pa.Table | pa.RecordBatch) -> pa.Table:
+    """Converts rows in SCHEMA to OUTPUT_SCHEMA."""
+    table = pa.Table.from_batches([data]) if isinstance(data, pa.RecordBatch) else data
+    bbox = table["bbox"]
+    derived = {
+        "time_ns": pc.cast(table["time_ns"], pa.int64()),
+        "time": pc.cast(table["time_ns"], pa.timestamp("us"), safe=False),
+        "longitude": pc.struct_field(bbox, "xmin"),
+        "latitude": pc.struct_field(bbox, "ymin"),
+    }
+    columns = [derived[f.name] if f.name in derived else table[f.name] for f in OUTPUT_SCHEMA]
+    return pa.Table.from_arrays(columns, schema=OUTPUT_SCHEMA)
 
 
 def geo_metadata(bbox: tuple[float, float, float, float]) -> dict:

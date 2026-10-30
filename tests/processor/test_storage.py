@@ -79,3 +79,18 @@ def test_put_parquet_streams_without_buffering_whole_file(monkeypatch):
     storage.put_parquet(store, "big.parquet", table, compression="zstd", row_group_size=500_000)
     md = pq.read_metadata(pa.BufferReader(storage.read_bytes(store, "big.parquet")))
     assert md.num_rows == 2_000_000 and md.num_row_groups == 4
+
+
+def test_download_many_writes_files_in_key_order(store, tmp_path):
+    keys = ["d/c.bin", "d/a.bin", "d/b.bin"]
+    for i, k in enumerate(keys):
+        storage.put_bytes(store, k, bytes([i]) * (i + 1))
+    out = tmp_path / "dl"
+    files = storage.download_many(store, keys, out)
+    assert [f.parent for f in files] == [out] * 3
+    assert [f.read_bytes() for f in files] == [bytes([i]) * (i + 1) for i in range(3)]
+    assert len(set(files)) == 3
+
+
+def test_download_many_empty(store, tmp_path):
+    assert storage.download_many(store, [], tmp_path / "dl") == []

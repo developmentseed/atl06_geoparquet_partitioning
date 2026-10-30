@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+from pathlib import Path
 from urllib.parse import urlparse
 
 import obstore
@@ -39,6 +40,32 @@ def get_many(store: ObjectStore, keys: list[str]) -> dict[str, obstore.Bytes]:
         return dict(await asyncio.gather(*(fetch(k) for k in keys)))
 
     return asyncio.run(fetch_all())
+
+
+def download_many(store: ObjectStore, keys: list[str], directory: Path) -> list[Path]:
+    """Fetch objects concurrently to local files, one per key; returns paths in ``keys`` order.
+
+    At most MAX_CONCURRENT_GETS objects are held in memory at once.
+    """
+    directory = Path(directory)
+    directory.mkdir(parents=True, exist_ok=True)
+    # Index-based names: keys from different directories may share a basename.
+    files = [directory / f"{i:06d}{Path(k).suffix}" for i, k in enumerate(keys)]
+    if not keys:
+        return files
+
+    async def fetch_all():
+        limit = asyncio.Semaphore(MAX_CONCURRENT_GETS)
+
+        async def fetch(key, path):
+            async with limit:
+                data = await (await obstore.get_async(store, key)).bytes_async()
+                path.write_bytes(data)
+
+        await asyncio.gather(*(fetch(k, f) for k, f in zip(keys, files, strict=True)))
+
+    asyncio.run(fetch_all())
+    return files
 
 
 def put_bytes(store: ObjectStore, key: str, data: bytes) -> None:
