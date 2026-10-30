@@ -94,3 +94,9 @@ def test_download_many_writes_files_in_key_order(store, tmp_path):
 
 def test_download_many_empty(store, tmp_path):
     assert storage.download_many(store, [], tmp_path / "dl") == []
+
+
+def test_exists(store):
+    storage.put_bytes(store, "a/b.json", b"{}")
+    assert storage.exists(store, "a/b.json")
+    assert not storage.exists(store, "a/c.json")

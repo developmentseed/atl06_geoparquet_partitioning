@@ -1,7 +1,8 @@
 """AWS Lambda entry points; thin wrappers over the library.
 
 Map steps receive ``{"Items": [...], "BatchInput": {"run_prefix": ...}}``;
-other steps receive the execution input ``{"run_prefix", "start"?, "end"?, "limit"?}``.
+other steps receive the execution input
+``{"run_prefix", "start"?, "end"?, "limit"?, "overwrite"?, "from_step"?}``.
 """
 
 import os
@@ -30,6 +31,11 @@ from atl06_processor.splits import SplitTable
 def get_output_store() -> S3Store:
     """The run bucket, using the Lambda role's credentials from the environment."""
     return S3Store(Settings().bucket, region=os.environ.get("AWS_REGION", "us-west-2"))
+
+
+def get_output_root() -> str:
+    """URI of the run bucket's root, for Iceberg file locations."""
+    return f"s3://{Settings().bucket}"
 
 
 def _nsidc_store(bucket: str) -> S3Store:
@@ -166,6 +172,23 @@ def convert_handler(event: dict, context=None) -> list[dict]:
     return results
 
 
+def prepare_compact_handler(event: dict, context=None) -> dict:
+    """Restarts a run at Compact: keeps staging/ and the split table, drops later outputs."""
+    _, paths, prefix = _context(event)
+    store = get_output_store()
+    if not storage.exists(store, paths.splits()):
+        raise ValueError(
+            f"run prefix {prefix!r} has no {paths.splits()}; only a run that finished "
+            "PlanSplits and Convert can restart at Compact"
+        )
+    for stale in (paths.data_dir(), paths.compact_stats_dir(), paths.iceberg_dir()):
+        storage.delete_prefix(store, stale)
+    return {
+        "ranges_key": paths.ranges_json(),
+        "ranges": len(storage.get_json(store, paths.ranges_json())),
+    }
+
+
 def compact_handler(event: dict, context=None) -> list[dict]:
     settings, paths, _ = _context(event)
     store = get_output_store()
@@ -180,4 +203,9 @@ def compact_handler(event: dict, context=None) -> list[dict]:
 
 def finalize_handler(event: dict, context=None) -> dict:
     _, paths, _ = _context(event)
-    return finalize_run(get_output_store(), paths)
+    return finalize_run(
+        get_output_store(),
+        paths,
+        root_uri=get_output_root(),
+        iceberg_properties={"s3.region": os.environ.get("AWS_REGION", "us-west-2")},
+    )

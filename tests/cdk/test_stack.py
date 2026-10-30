@@ -27,9 +27,28 @@ def definition(template) -> str:
     return json.dumps(sm["Properties"]["DefinitionString"])
 
 
-def test_six_image_lambdas(template):
+def test_seven_image_lambdas(template):
     fns = template.find_resources("AWS::Lambda::Function", {"Properties": {"PackageType": "Image"}})
-    assert len(fns) == 6  # inventory, sample, plan_splits, convert, compact, finalize
+    # inventory, sample, plan_splits, convert, prepare_compact, compact, finalize
+    assert len(fns) == 7
+
+
+def test_from_step_choice_routes_to_prepare_compact(template):
+    d = definition(template)
+    assert '\\"Type\\":\\"Choice\\"' in d and '\\"Variable\\":\\"$.from_step\\"' in d
+    assert '\\"StringEquals\\":\\"compact\\"' in d
+    assert '\\"ResultPath\\":\\"$.plan\\"' in d
+    template.has_resource_properties(
+        "AWS::Lambda::Function",
+        {"ImageConfig": {"Command": ["atl06_processor.handlers.prepare_compact_handler"]}},
+    )
+
+
+def test_max_rows_per_file_passed_to_lambdas(template):
+    template.has_resource_properties(
+        "AWS::Lambda::Function",
+        {"Environment": {"Variables": {"ATL06_MAX_ROWS_PER_FILE": "25000000"}}},
+    )
 
 
 def test_state_machine_has_three_distributed_maps(template):

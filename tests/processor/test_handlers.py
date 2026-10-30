@@ -25,6 +25,7 @@ def local_env(monkeypatch, make_granule, tmp_path):
     src = LocalStore(tmp_path / "src")
     out = LocalStore(tmp_path / "bucket", mkdir=True)
     monkeypatch.setattr(handlers, "get_output_store", lambda: out)
+    monkeypatch.setattr(handlers, "get_output_root", lambda: (tmp_path / "bucket").as_uri())
     monkeypatch.setattr(
         handlers, "get_source", lambda url: (src, storage.split_s3_url(url)[1].rsplit("/", 1)[1])
     )
@@ -56,6 +57,45 @@ def test_handlers_end_to_end_local(local_env):
     handlers.compact_handler({"Items": ranges, "BatchInput": batch_input})
     report = handlers.finalize_handler({"run_prefix": "runs/t"})
     assert report["rows_out_compact"] == 3000 and report["files"] >= 2
+    assert report["iceberg_metadata"].endswith(".metadata.json")
+    assert "/runs/t/iceberg/metadata/" in report["iceberg_metadata"]
+
+
+def full_run(store, prefix="runs/t"):
+    batch_input = {"run_prefix": prefix}
+    inv = handlers.inventory_handler({"run_prefix": prefix})
+    handlers.sample_handler({"Items": storage.get_json(store, inv["sample_key"]),
+                             "BatchInput": batch_input})
+    plan = handlers.plan_splits_handler({"run_prefix": prefix})
+    handlers.convert_handler({"Items": storage.get_json(store, inv["granules_key"]),
+                              "BatchInput": batch_input})
+    handlers.compact_handler({"Items": storage.get_json(store, plan["ranges_key"]),
+                              "BatchInput": batch_input})
+    return plan, handlers.finalize_handler({"run_prefix": prefix})
+
+
+def test_prepare_compact_requires_splits(local_env):
+    with pytest.raises(ValueError, match="splits"):
+        handlers.prepare_compact_handler({"run_prefix": "runs/never-planned"})
+
+
+def test_prepare_compact_clears_previous_outputs(local_env):
+    store = local_env
+    plan, first = full_run(store)
+    stale = ["runs/t/data/part-99999-00.parquet", "runs/t/stats/compact/99999-00.json",
+             "runs/t/iceberg/metadata/stale.metadata.json"]
+    for key in stale:
+        storage.put_bytes(store, key, b"x")
+    prepared = handlers.prepare_compact_handler({"run_prefix": "runs/t", "from_step": "compact"})
+    assert prepared == {"ranges_key": plan["ranges_key"], "ranges": plan["ranges"]}
+    for prefix in ("runs/t/data", "runs/t/stats/compact", "runs/t/iceberg"):
+        assert storage.list_keys(store, prefix) == []
+    assert storage.list_keys(store, "runs/t/staging")  # Convert output is kept
+    handlers.compact_handler({"Items": storage.get_json(store, plan["ranges_key"]),
+                              "BatchInput": {"run_prefix": "runs/t"}})
+    second = handlers.finalize_handler({"run_prefix": "runs/t"})
+    assert second["rows_out_compact"] == first["rows_out_compact"] == 3000
+    assert second["files"] == first["files"]
 
 
 def test_inventory_refuses_existing_run_prefix(local_env):

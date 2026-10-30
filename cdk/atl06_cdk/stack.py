@@ -1,6 +1,7 @@
 """Lambda + Step Functions pipeline.
 
-Inventory → Sample → PlanSplits → Convert → Compact → Finalize.
+Inventory → Sample → PlanSplits → Convert → Compact → Finalize, or, with execution input
+``"from_step": "compact"``, PrepareCompact → Compact → Finalize on an existing run prefix.
 """
 
 from pathlib import Path
@@ -44,6 +45,7 @@ class Atl06StacHashStack(Stack):
             "ATL06_YEAR": str(settings.year),
             "ATL06_TARGET_ROWS_PER_FILE": str(settings.target_rows_per_file),
             "ATL06_ROW_GROUP_SIZE": str(settings.row_group_size),
+            "ATL06_MAX_ROWS_PER_FILE": str(settings.max_rows_per_file),
             "ATL06_SAMPLE_GRANULE_FRACTION": str(settings.sample_granule_fraction),
             "ATL06_SAMPLE_ROW_FRACTION": str(settings.sample_row_fraction),
         }
@@ -76,6 +78,7 @@ class Atl06StacHashStack(Stack):
         sample = function("Sample", "sample_handler", settings.convert_memory_mb)
         plan_splits = function("PlanSplits", "plan_splits_handler", 4096)
         convert = function("Convert", "convert_handler", settings.convert_memory_mb)
+        prepare_compact = function("PrepareCompact", "prepare_compact_handler", 2048)
         compact = function(
             "Compact", "compact_handler", settings.compact_memory_mb, storage_mb=10240
         )
@@ -112,7 +115,11 @@ class Atl06StacHashStack(Stack):
             )
             return dmap
 
-        definition = (
+        plan_selector = {"ranges_key.$": "$.Payload.ranges_key", "ranges.$": "$.Payload.ranges"}
+        compact_map = distributed_map("CompactMap", compact, "$.plan.ranges_key", 1,
+                                      settings.compact_concurrency)
+        compact_map.next(invoke("FinalizeStep", finalize, "$.report", {"report.$": "$.Payload"}))
+        full_run = (
             invoke(
                 "InventoryStep", inventory, "$.inventory",
                 {
@@ -123,13 +130,23 @@ class Atl06StacHashStack(Stack):
             )
             .next(distributed_map("SampleMap", sample, "$.inventory.sample_key", 5,
                                   settings.convert_concurrency))
-            .next(invoke("PlanSplitsStep", plan_splits, "$.plan",
-                         {"ranges_key.$": "$.Payload.ranges_key", "ranges.$": "$.Payload.ranges"}))
+            .next(invoke("PlanSplitsStep", plan_splits, "$.plan", plan_selector))
             .next(distributed_map("ConvertMap", convert, "$.inventory.granules_key",
                                   settings.convert_batch_size, settings.convert_concurrency))
-            .next(distributed_map("CompactMap", compact, "$.plan.ranges_key", 1,
-                                  settings.compact_concurrency))
-            .next(invoke("FinalizeStep", finalize, "$.report", {"report.$": "$.Payload"}))
+            .next(compact_map)
+        )
+        restart = invoke("PrepareCompactStep", prepare_compact, "$.plan", plan_selector)
+        restart.next(compact_map)
+        definition = (
+            sfn.Choice(self, "StartAt")
+            .when(
+                sfn.Condition.and_(
+                    sfn.Condition.is_present("$.from_step"),
+                    sfn.Condition.string_equals("$.from_step", "compact"),
+                ),
+                restart,
+            )
+            .otherwise(full_run)
         )
         self.state_machine = sfn.StateMachine(
             self,

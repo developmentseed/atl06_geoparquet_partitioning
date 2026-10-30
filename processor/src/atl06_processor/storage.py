@@ -141,6 +141,14 @@ def list_keys(store: ObjectStore, prefix: str, suffix: str = "") -> list[str]:
     return sorted(m["path"] for m in metas if m["path"].endswith(suffix))
 
 
+def exists(store: ObjectStore, key: str) -> bool:
+    try:
+        obstore.head(store, key)
+    except FileNotFoundError:
+        return False
+    return True
+
+
 def prefix_exists(store: ObjectStore, prefix: str) -> bool:
     return bool(list_keys(store, prefix))
 

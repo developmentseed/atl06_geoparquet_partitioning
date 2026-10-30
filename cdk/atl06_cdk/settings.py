@@ -19,5 +19,6 @@ class StackSettings(BaseSettings):
     year: int = 2023
     target_rows_per_file: int = 10_000_000
     row_group_size: int = 500_000
+    max_rows_per_file: int = 25_000_000
     sample_granule_fraction: float = 0.02
     sample_row_fraction: float = 0.01
